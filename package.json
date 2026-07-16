@@ -1,0 +1,31 @@
+{
+  "name": "four-kingdoms",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/client",
+    "packages/content",
+    "packages/sim"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @kingdoms/client",
+    "build": "npm run build --workspace @kingdoms/client && npm run typecheck",
+    "preview": "vite preview apps/client --host 127.0.0.1",
+    "typecheck": "tsc --noEmit -p packages/content && tsc --noEmit -p packages/sim && tsc --noEmit -p apps/client",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "benchmark": "vitest run packages/sim/test/benchmark.test.ts"
+  },
+  "devDependencies": {
+    "@types/howler": "^2.2.12",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/three": "^0.185.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0",
+    "vitest": "^3.2.0"
+  }
+}

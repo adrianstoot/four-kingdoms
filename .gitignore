@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+.vite/
+*.log
+.env
+.DS_Store
+playtest-*.png
+
+*.tsbuildinfo
+.playwright-cli/
+output/
+copiar estetica.png
+reference/
+meshy_output/
+apps/client/dist-file/

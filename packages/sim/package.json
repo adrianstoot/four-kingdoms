@@ -1,0 +1,8 @@
+{
+  "name": "@kingdoms/sim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": { "@kingdoms/content": "0.1.0" }
+}
