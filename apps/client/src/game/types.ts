@@ -1,5 +1,28 @@
 export type QualityPreset = "low" | "medium" | "high" | "ultra";
 
+export interface CameraTarget {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/**
+ * Public, renderer-agnostic camera state consumed by React and the minimap.
+ * Angles are expressed in radians and distance in world metres.
+ */
+export interface CameraPose {
+  yaw: number;
+  pitch: number;
+  distance: number;
+  target: CameraTarget;
+}
+
+export interface RendererResourceProgress {
+  /** Normalized [0, 1] progress for textures, procedural rigs and GPU uploads. */
+  progress: number;
+  label?: string;
+}
+
 export type CardPlacementKind = "unit" | "building" | "spell";
 
 export interface SelectedCard {
@@ -41,6 +64,11 @@ export interface WorldRendererCallbacks {
   onPlacementChange?: (placement: PlacementPreview | null) => void;
   onMetrics?: (metrics: WorldRendererMetrics) => void;
   onReady?: (backend: "webgpu" | "webgl2") => void;
+  onResourcesReady?: () => void;
+  onResourceProgress?: (progress: RendererResourceProgress) => void;
+  onFirstFrame?: () => void;
+  onCameraPoseChange?: (pose: CameraPose) => void;
+  onCancelSelection?: () => void;
 }
 
 export interface NormalizedUnit {

@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { MAP_GRAPH } from '@kingdoms/content';
 import { buildRoutePaths, createGame, nearestOnRoutePath, sampleRoutePath } from '../src';
 
-const GUARD_RADIUS = 0.55;
-
 describe('smooth deterministic route traversal', () => {
   it('builds continuous directed paths over all twelve painted lanes', () => {
     const paths = buildRoutePaths();
@@ -28,7 +26,7 @@ describe('smooth deterministic route traversal', () => {
     expect([...laneIds].sort()).toEqual(MAP_GRAPH.lanes.map((lane) => lane.id).sort());
   });
 
-  it('keeps seeded four-unit groups inside the road on every directed route', () => {
+  it('keeps units on the exact centerline of every directed route', () => {
     const paths = buildRoutePaths();
     const visitedLanes = new Set<string>();
     let maximumLateralDistance = 0;
@@ -36,7 +34,7 @@ describe('smooth deterministic route traversal', () => {
     for (let routeIndex = 0; routeIndex < paths.length; routeIndex += 1) {
       const path = paths[routeIndex]!;
       const game = createGame({ seed: 0x51a7e000 + routeIndex, botPlayers: [], maxEntities: 64 });
-      expect(game.spawnDebugRouteGroup(path.routeId, 4)).toBe(4);
+      expect(game.spawnDebugRouteGroup(path.routeId, 1)).toBe(1);
       const priorProgress = new Map<number, number>();
       let reachedDestination = false;
       let crossedCenterTransition = path.sections.length === 1;
@@ -55,8 +53,7 @@ describe('smooth deterministic route traversal', () => {
           maximumLateralDistance = Math.max(maximumLateralDistance, nearest.lateralDistance);
           minimumProgress = Math.min(minimumProgress, nearest.routeDistance);
 
-          // Quantized snapshots retain at least 0.11 world units of painted-road margin.
-          expect(nearest.lateralDistance + GUARD_RADIUS).toBeLessThanOrEqual(nearest.laneWidth * 0.5 - 0.11);
+          expect(nearest.lateralDistance).toBeLessThanOrEqual(0.03);
           const previous = priorProgress.get(entityId);
           if (previous !== undefined) {
             expect(nearest.routeDistance).toBeGreaterThanOrEqual(previous - 0.2);
@@ -76,6 +73,6 @@ describe('smooth deterministic route traversal', () => {
     }
 
     expect([...visitedLanes].sort()).toEqual(MAP_GRAPH.lanes.map((lane) => lane.id).sort());
-    expect(maximumLateralDistance).toBeLessThan(1.5);
+    expect(maximumLateralDistance).toBeLessThanOrEqual(0.03);
   });
 });

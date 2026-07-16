@@ -92,6 +92,7 @@ export interface EntitySnapshotTable {
   maxHp: Uint16Array;
   state: Uint8Array;
   stateTick: Uint16Array;
+  motionPhase: Uint16Array;
   targetId: Int32Array;
 }
 
@@ -100,7 +101,8 @@ export type SimEvent =
   | { type: 'damage'; tick: number; sourceId: number; targetType: 'entity' | 'castle'; targetId: number; amount: number }
   | { type: 'death'; tick: number; entityId: number; playerId: PlayerId }
   | { type: 'capture'; tick: number; playerId: PlayerId | null }
-  | { type: 'spell'; tick: number; playerId: PlayerId; cardId: SpellCardId; position: Vec2; targetIds: number[] }
+  | { type: 'spell-cast'; tick: number; castId: number; playerId: PlayerId; cardId: SpellCardId; origin: Vec2; destination: Vec2; impactTick: number }
+  | { type: 'spell-impact'; tick: number; castId: number; playerId: PlayerId; cardId: SpellCardId; origin: Vec2; destination: Vec2; impactTick: number; targetIds: number[] }
   | { type: 'elimination'; tick: number; playerId: PlayerId }
   | { type: 'game-over'; tick: number; winnerPlayerId: PlayerId | null; draw: boolean }
   | { type: 'command-rejected'; tick: number; playerId: PlayerId; sequence: number; reason: CommandRejectionReason };
@@ -125,7 +127,9 @@ export interface PlacementResult {
   position: Vec2;
   yaw: number;
   pathDistance: number;
+  routeDistance: number;
+  routeId?: string;
   laneId?: string;
   padId?: string;
-  reason?: 'invalid-player' | 'invalid-route' | 'wrong-owner' | 'outside-deployment-zone' | 'too-far-from-lane' | 'no-tower-pad';
+  reason?: 'invalid-player' | 'invalid-route' | 'wrong-owner' | 'outside-deployment-zone' | 'too-far-from-lane' | 'no-tower-pad' | 'no-placement-zone';
 }

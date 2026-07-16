@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import { RenderPipeline, WebGPURenderer } from "three/webgpu";
 import { toonOutlinePass } from "three/tsl";
-import { CONTENT, MAP_GRAPH } from "@kingdoms/content";
-import type { GameSnapshot } from "@kingdoms/sim";
+import { CONTENT, MAP_GRAPH, type CardId } from "@kingdoms/content";
+import { findBestPlacement, type GameSnapshot } from "@kingdoms/sim";
 import { CombatEffects } from "./CombatEffects";
 import { normalizeGameSnapshot } from "./normalizeSimSnapshot";
 import {
@@ -29,7 +29,7 @@ import {
   type UnitPose,
   type VegetationBatch,
 } from "./procedural";
-import type { NormalizedSnapshot, NormalizedUnit, QualityPreset } from "./types";
+import type { CameraPose, NormalizedSnapshot, NormalizedUnit, QualityPreset } from "./types";
 
 export type { QualityPreset } from "./types";
 
@@ -80,6 +80,12 @@ export interface WorldRendererCallbacks {
   onDeploy?: (placement: PlacementPreview) => void;
   onPlacementChange?: (placement: PlacementPreview | null) => void;
   onReady?: (backend: RendererBackend) => void;
+  onResourcesReady?: () => void;
+  onResourceProgress?: (progress: { progress: number; label?: string }) => void;
+  onFirstFrame?: () => void;
+  onCameraPoseChange?: (pose: CameraPose) => void;
+  onCancelSelection?: () => void;
+  onError?: (error: Error) => void;
 }
 
 interface QualitySettings {
@@ -120,31 +126,21 @@ const QUALITY: Record<QualityPreset, QualitySettings> = {
 };
 
 const EMPTY_SNAPSHOT = normalizeGameSnapshot(null);
-const CAMERA_ELEVATION = THREE.MathUtils.degToRad(35.264);
-const CAMERA_DISTANCE = 145;
-const MIN_VIEW_HEIGHT = 96;
-const BOARD_PROJECTED_WIDTH = 154;
+const CAMERA_FOV = 38;
+const MIN_CAMERA_PITCH = THREE.MathUtils.degToRad(28);
+const MAX_CAMERA_PITCH = THREE.MathUtils.degToRad(65);
+const MIN_CAMERA_DISTANCE = 32;
+const MAX_CAMERA_DISTANCE = 145;
+const CAMERA_TARGET_LIMIT = 52;
+const EDGE_PAN_SIZE = 14;
 
 function materialArray(material: THREE.Material | THREE.Material[]): THREE.Material[] {
   return Array.isArray(material) ? material : [material];
 }
 
-function smoothStep(value: number): number {
-  const clamped = THREE.MathUtils.clamp(value, 0, 1);
-  return clamped * clamped * (3 - 2 * clamped);
-}
-
 function lerpAngle(from: number, to: number, alpha: number): number {
   const delta = THREE.MathUtils.euclideanModulo(to - from + Math.PI, Math.PI * 2) - Math.PI;
   return from + delta * alpha;
-}
-
-function unitScale(kind: string): number {
-  if (kind.includes("giant")) return 1.2;
-  if (kind.includes("commander")) return 1.1;
-  if (kind.includes("knight")) return 1.08;
-  if (kind.includes("archer")) return 0.98;
-  return 1;
 }
 
 function unitVisualKey(archetype: UnitArchetype, pose: UnitPose): UnitVisualKey {
@@ -167,7 +163,7 @@ function isTextInput(target: EventTarget | null): boolean {
 
 export class WorldRenderer {
   readonly scene = new THREE.Scene();
-  readonly camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 360);
+  readonly camera = new THREE.PerspectiveCamera(CAMERA_FOV, 1, 0.1, 360);
 
   private readonly canvas: HTMLCanvasElement;
   private readonly callbacks: WorldRendererCallbacks;
@@ -179,7 +175,6 @@ export class WorldRenderer {
   private worldBuilt = false;
 
   private readonly lanes: LaneVisual[] = buildLanes(MAP_GRAPH);
-  private readonly allRoadSamples = this.lanes.flatMap((lane) => lane.samples);
   private readonly towerPads: PlacementPad[] = MAP_GRAPH.towerPads
     .filter((pad) => pad.playerId === LOCAL_PLAYER_ID)
     .map((pad) => {
@@ -218,18 +213,19 @@ export class WorldRenderer {
   private resizeObserver: ResizeObserver | null = null;
 
   private readonly cameraTarget = new THREE.Vector3(0, 0, 0);
+  private readonly desiredCameraTarget = new THREE.Vector3(0, 0, 0);
   private yaw = THREE.MathUtils.degToRad(225);
-  private rotationFrom = this.yaw;
-  private rotationTo = this.yaw;
-  private rotationStartedAt = 0;
-  private rotationActive = false;
-  private zoom = 1;
-  private targetZoom = 1;
+  private targetYaw = this.yaw;
+  private pitch = THREE.MathUtils.degToRad(45);
+  private targetPitch = this.pitch;
+  private distance = 118;
+  private targetDistance = this.distance;
   private readonly pressedKeys = new Set<string>();
 
   private pointerDown = false;
   private pointerDragged = false;
   private pointerId = -1;
+  private pointerButton = -1;
   private pointerX = 0;
   private pointerY = 0;
   private pointerDownX = 0;
@@ -245,6 +241,11 @@ export class WorldRenderer {
   private readonly quaternion = new THREE.Quaternion();
   private readonly shadowQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI * 0.5, 0, 0));
   private readonly cameraRight = new THREE.Vector3();
+  private readonly cameraForward = new THREE.Vector3();
+  private readonly zoomAnchor = new THREE.Vector3();
+  private pointerInside = false;
+  private firstFramePublished = false;
+  private lastPoseSignature = "";
 
   private lastFrameAt = 0;
   private lastMetricsAt = 0;
@@ -261,7 +262,9 @@ export class WorldRenderer {
   async init(): Promise<void> {
     if (this.initialized) return;
     if (this.disposed) throw new Error("Cannot initialize a disposed WorldRenderer.");
+    this.callbacks.onResourceProgress?.({ progress: 0.08, label: "Preparando terreno" });
     this.buildWorld();
+    this.callbacks.onResourceProgress?.({ progress: 0.42, label: "Construyendo los reinos" });
 
     const requestWebGPU = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("webgpu");
     const hasWebGPU = typeof navigator !== "undefined" && "gpu" in navigator && requestWebGPU;
@@ -275,6 +278,7 @@ export class WorldRenderer {
       this.backend = "webgl2";
     }
     if (!this.renderer) throw new Error("Renderer initialization did not complete.");
+    this.callbacks.onResourceProgress?.({ progress: 0.82, label: "Preparando iluminaci?n" });
     this.renderPipeline = new RenderPipeline(this.renderer);
     this.renderPipeline.outputNode = toonOutlinePass(this.scene, this.camera, new THREE.Color(0x172019), 0.0018, 0.82);
     this.renderPipeline.needsUpdate = true;
@@ -286,6 +290,9 @@ export class WorldRenderer {
     this.applyCamera(0);
     this.initialized = true;
     this.callbacks.onReady?.(this.backend);
+    this.callbacks.onResourceProgress?.({ progress: 1, label: "Campo de batalla listo" });
+    this.callbacks.onResourcesReady?.();
+    this.emitCameraPose(true);
     await this.renderer.setAnimationLoop(this.onFrame);
   }
 
@@ -328,12 +335,11 @@ export class WorldRenderer {
   }
 
   rotate(direction: -1 | 1): void {
-    const now = performance.now();
-    this.updateRotation(now);
-    this.rotationFrom = this.yaw;
-    this.rotationTo = this.yaw + direction * Math.PI * 0.5;
-    this.rotationStartedAt = now;
-    this.rotationActive = true;
+    this.targetYaw += direction * THREE.MathUtils.degToRad(15);
+  }
+
+  recalculatePlacement(): void {
+    if (this.selectedCard) this.updatePlacementFromClient(this.pointerX, this.pointerY);
   }
 
   setQuality(quality: QualityPreset): void {
@@ -645,7 +651,7 @@ export class WorldRenderer {
       const counts = ownerUnitCounts[owner];
       if (!batch || !counts) continue;
       const isBuilding = current.kind.includes("cannon") || current.kind.includes("tower");
-      const size = unitScale(current.kind) * (isBuilding ? 1.3 : 2.0);
+      const size = isBuilding ? 1.3 : 1;
       const bob = current.state === "walk" ? Math.abs(Math.sin(timeSeconds * 7.5 + current.id * 1.71)) * 0.075 : 0;
       const hitShake = current.state === "hit" ? Math.sin(timeSeconds * 42 + current.id) * 0.11 : 0;
       const buildingPulse = current.state === "attack" ? 1 + Math.max(0, Math.sin(timeSeconds * 11 + current.id)) * 0.1 : 1;
@@ -752,16 +758,6 @@ export class WorldRenderer {
     }
   }
 
-  private updateRotation(now: number): void {
-    if (!this.rotationActive) return;
-    const alpha = smoothStep((now - this.rotationStartedAt) / 250);
-    this.yaw = THREE.MathUtils.lerp(this.rotationFrom, this.rotationTo, alpha);
-    if (alpha >= 1) {
-      this.yaw = THREE.MathUtils.euclideanModulo(this.rotationTo, Math.PI * 2);
-      this.rotationActive = false;
-    }
-  }
-
   private updateControls(deltaSeconds: number): void {
     let horizontal = 0;
     let vertical = 0;
@@ -769,36 +765,76 @@ export class WorldRenderer {
     if (this.pressedKeys.has("KeyD") || this.pressedKeys.has("ArrowRight")) horizontal += 1;
     if (this.pressedKeys.has("KeyW") || this.pressedKeys.has("ArrowUp")) vertical += 1;
     if (this.pressedKeys.has("KeyS") || this.pressedKeys.has("ArrowDown")) vertical -= 1;
+
+    const rect = this.canvas.getBoundingClientRect();
+    if (this.pointerInside && !this.pointerDown && rect.width > 0 && rect.height > 0) {
+      const localX = this.pointerX - rect.left;
+      const localY = this.pointerY - rect.top;
+      if (localX <= EDGE_PAN_SIZE) horizontal -= 1;
+      else if (localX >= rect.width - EDGE_PAN_SIZE) horizontal += 1;
+      if (localY <= EDGE_PAN_SIZE) vertical += 1;
+      else if (localY >= rect.height - EDGE_PAN_SIZE) vertical -= 1;
+    }
+
+    const rotationInput = (this.pressedKeys.has("KeyE") ? 1 : 0) - (this.pressedKeys.has("KeyQ") ? 1 : 0);
+    if (rotationInput !== 0) this.targetYaw += rotationInput * THREE.MathUtils.degToRad(72) * deltaSeconds;
+
     if (horizontal !== 0 || vertical !== 0) {
-      const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
-      const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
-      const speed = 24 * this.zoom * deltaSeconds;
-      this.cameraTarget.addScaledVector(right, horizontal * speed).addScaledVector(forward, vertical * speed);
+      const length = Math.hypot(horizontal, vertical) || 1;
+      horizontal /= length;
+      vertical /= length;
+      this.cameraRight.set(Math.cos(this.targetYaw), 0, -Math.sin(this.targetYaw));
+      this.cameraForward.set(-Math.sin(this.targetYaw), 0, -Math.cos(this.targetYaw));
+      const speed = (9 + this.targetDistance * 0.18) * deltaSeconds;
+      this.desiredCameraTarget
+        .addScaledVector(this.cameraRight, horizontal * speed)
+        .addScaledVector(this.cameraForward, vertical * speed);
       this.clampCameraTarget();
     }
-    this.zoom = THREE.MathUtils.damp(this.zoom, this.targetZoom, 10, deltaSeconds);
+
+    const cameraBlend = 1 - Math.exp(-10 * deltaSeconds);
+    const targetBlend = 1 - Math.exp(-8 * deltaSeconds);
+    this.yaw = lerpAngle(this.yaw, this.targetYaw, cameraBlend);
+    this.pitch = THREE.MathUtils.lerp(this.pitch, this.targetPitch, cameraBlend);
+    this.distance = THREE.MathUtils.lerp(this.distance, this.targetDistance, cameraBlend);
+    this.cameraTarget.lerp(this.desiredCameraTarget, targetBlend);
   }
 
-  private applyCamera(now: number): void {
-    this.updateRotation(now);
-    const horizontal = Math.cos(CAMERA_ELEVATION) * CAMERA_DISTANCE;
+  private applyCamera(_now: number): void {
+    const horizontalDistance = Math.cos(this.pitch) * this.distance;
     this.camera.position.set(
-      this.cameraTarget.x + Math.sin(this.yaw) * horizontal,
-      this.cameraTarget.y + Math.sin(CAMERA_ELEVATION) * CAMERA_DISTANCE,
-      this.cameraTarget.z + Math.cos(this.yaw) * horizontal,
+      this.cameraTarget.x + Math.sin(this.yaw) * horizontalDistance,
+      this.cameraTarget.y + Math.sin(this.pitch) * this.distance,
+      this.cameraTarget.z + Math.cos(this.yaw) * horizontalDistance,
     );
     this.camera.lookAt(this.cameraTarget);
     this.camera.updateMatrixWorld();
+    this.emitCameraPose();
+    if (this.selectedCard) this.updatePlacementFromClient(this.pointerX, this.pointerY);
   }
 
   private clampCameraTarget(): void {
-    this.cameraTarget.x = THREE.MathUtils.clamp(this.cameraTarget.x, -34, 34);
-    this.cameraTarget.z = THREE.MathUtils.clamp(this.cameraTarget.z, -34, 34);
+    this.desiredCameraTarget.x = THREE.MathUtils.clamp(this.desiredCameraTarget.x, -CAMERA_TARGET_LIMIT, CAMERA_TARGET_LIMIT);
+    this.desiredCameraTarget.z = THREE.MathUtils.clamp(this.desiredCameraTarget.z, -CAMERA_TARGET_LIMIT, CAMERA_TARGET_LIMIT);
+    this.desiredCameraTarget.y = 0;
   }
 
-  private fittedViewHeight(width: number, height: number): number {
-    const aspect = width / Math.max(1, height);
-    return Math.max(MIN_VIEW_HEIGHT, BOARD_PROJECTED_WIDTH / Math.max(0.1, aspect));
+  private emitCameraPose(force = false): void {
+    const signature = [
+      this.yaw.toFixed(3),
+      this.pitch.toFixed(3),
+      this.distance.toFixed(2),
+      this.cameraTarget.x.toFixed(2),
+      this.cameraTarget.z.toFixed(2),
+    ].join(":");
+    if (!force && signature === this.lastPoseSignature) return;
+    this.lastPoseSignature = signature;
+    this.callbacks.onCameraPoseChange?.({
+      yaw: THREE.MathUtils.euclideanModulo(this.yaw, Math.PI * 2),
+      pitch: this.pitch,
+      distance: this.distance,
+      target: { x: this.cameraTarget.x, y: this.cameraTarget.y, z: this.cameraTarget.z },
+    });
   }
 
   private resize = (): void => {
@@ -807,12 +843,7 @@ export class WorldRenderer {
     const width = Math.max(1, Math.floor(rect.width || this.canvas.clientWidth || 1));
     const height = Math.max(1, Math.floor(rect.height || this.canvas.clientHeight || 1));
     this.renderer.setSize(width, height, false);
-    const halfHeight = this.fittedViewHeight(width, height) * this.zoom * 0.5;
-    const halfWidth = halfHeight * (width / height);
-    this.camera.left = -halfWidth;
-    this.camera.right = halfWidth;
-    this.camera.top = halfHeight;
-    this.camera.bottom = -halfHeight;
+    this.camera.aspect = width / Math.max(1, height);
     this.camera.updateProjectionMatrix();
   };
 
@@ -856,18 +887,19 @@ export class WorldRenderer {
     } else {
       this.renderer.render(this.scene, this.camera);
     }
+    if (!this.firstFramePublished) {
+      this.firstFramePublished = true;
+      this.callbacks.onFirstFrame?.();
+    }
     this.publishMetrics(now);
   };
 
   private resizeProjectionOnly(): void {
     const width = Math.max(1, this.canvas.clientWidth);
     const height = Math.max(1, this.canvas.clientHeight);
-    const halfHeight = this.fittedViewHeight(width, height) * this.zoom * 0.5;
-    const halfWidth = halfHeight * (width / height);
-    this.camera.left = -halfWidth;
-    this.camera.right = halfWidth;
-    this.camera.top = halfHeight;
-    this.camera.bottom = -halfHeight;
+    const aspect = width / height;
+    if (Math.abs(this.camera.aspect - aspect) < 0.0001) return;
+    this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
   }
 
@@ -892,120 +924,41 @@ export class WorldRenderer {
     });
   }
 
-  private routeForLane(laneId: string, direction: 1 | -1): string | null {
-    const zone = MAP_GRAPH.deploymentZones.find((candidate) => {
-      if (candidate.playerId !== LOCAL_PLAYER_ID || candidate.laneId !== laneId) return false;
-      const route = MAP_GRAPH.routes.find((item) => item.id === candidate.routeIds[0]);
-      const reverse = route?.steps[0]?.reverse ?? false;
-      return (direction === -1) === reverse;
-    });
-    return zone?.routeIds[0] ?? null;
-  }
-
-  private nearestRoad(point: THREE.Vector3): { lane: LaneVisual; t: number; point: THREE.Vector3; distance: number } | null {
-    let nearest: { lane: LaneVisual; t: number; point: THREE.Vector3; distance: number } | null = null;
-    let bestSquared = Number.POSITIVE_INFINITY;
-    for (const sample of this.allRoadSamples) {
-      const dx = point.x - sample.point.x;
-      const dz = point.z - sample.point.z;
-      const distanceSquared = dx * dx + dz * dz;
-      if (distanceSquared >= bestSquared) continue;
-      const lane = this.lanes.find((candidate) => candidate.id === sample.laneId);
-      if (!lane) continue;
-      bestSquared = distanceSquared;
-      nearest = { lane, t: sample.t, point: sample.point, distance: Math.sqrt(distanceSquared) };
-    }
-    return nearest;
-  }
-
   private computePlacement(world: THREE.Vector3): PlacementPreview | null {
     if (!this.selectedCard) return null;
     const insideMap = Math.abs(world.x) <= MAP_HALF_SIZE && Math.abs(world.z) <= MAP_HALF_SIZE;
-    if (this.selectedKind === "building") {
-      let nearestPad: PlacementPad | null = null;
-      let nearestDistance = Number.POSITIVE_INFINITY;
-      for (const pad of this.towerPads) {
-        const distance = Math.hypot(world.x - pad.point.x, world.z - pad.point.z);
-        if (distance < nearestDistance) {
-          nearestPad = pad;
-          nearestDistance = distance;
-        }
-      }
-      const valid = insideMap && nearestPad !== null && nearestDistance <= 4.5;
-      const point = valid && nearestPad ? nearestPad.point : world;
-      return {
-        cardId: this.selectedCard ?? "",
-        kind: "building",
-        playerId: LOCAL_PLAYER_ID,
-        x: point.x,
-        z: point.z,
-        laneId: nearestPad?.laneId ?? "",
-        routeId: nearestPad?.routeId ?? "",
-        routeT: 0.12,
-        direction: nearestPad?.direction ?? 1,
-        valid,
-        reason: valid ? undefined : "invalid-pad",
-      };
-    }
-
-    const road = this.nearestRoad(world);
-    const nearLane = road !== null && road.distance <= road.lane.width * 0.72;
-    if (this.selectedKind === "spell") {
-      const valid = insideMap && nearLane;
-      const point = valid && road ? road.point : world;
-      return {
-        cardId: this.selectedCard,
-        kind: "spell",
-        playerId: LOCAL_PLAYER_ID,
-        x: point.x,
-        z: point.z,
-        laneId: road?.lane.id ?? "",
-        routeId: "",
-        routeT: road?.t ?? 0,
-        direction: 1,
-        valid,
-        reason: !insideMap ? "outside-map" : valid ? undefined : "outside-lane",
-      };
-    }
-
-    if (!road) {
-      return {
-        cardId: this.selectedCard,
-        kind: "unit",
-        playerId: LOCAL_PLAYER_ID,
-        x: world.x,
-        z: world.z,
-        laneId: "",
-        routeId: "",
-        routeT: 0,
-        direction: 1,
-        valid: false,
-        reason: "outside-lane",
-      };
-    }
-    const zone = MAP_GRAPH.deploymentZones.find((candidate) =>
-      candidate.playerId === LOCAL_PLAYER_ID
-      && candidate.laneId === road.lane.id
-      && road.t >= Math.min(candidate.startT, candidate.endT) - 0.015
-      && road.t <= Math.max(candidate.startT, candidate.endT) + 0.015,
+    const result = findBestPlacement(
+      LOCAL_PLAYER_ID,
+      this.selectedCard as CardId,
+      { x: world.x, z: world.z },
+      { preferredRouteId: this.currentPlacement?.routeId || undefined },
     );
-    const route = zone ? MAP_GRAPH.routes.find((candidate) => candidate.id === zone.routeIds[0]) : undefined;
+    const route = result.routeId
+      ? MAP_GRAPH.routes.find((candidate) => candidate.id === result.routeId)
+      : undefined;
     const direction: 1 | -1 = route?.steps[0]?.reverse ? -1 : 1;
-    const routeId = zone?.routeIds[0] ?? this.routeForLane(road.lane.id, direction);
-    const valid = insideMap && nearLane && Boolean(zone && routeId);
-    const point = nearLane ? road.point : world;
+    const valid = insideMap && result.valid;
+    const reason: PlacementPreview["reason"] = !insideMap
+      ? "outside-map"
+      : valid
+        ? undefined
+        : this.selectedKind === "building"
+          ? "invalid-pad"
+          : result.reason === "too-far-from-lane" || result.reason === "no-placement-zone"
+            ? "outside-lane"
+            : "enemy-zone";
     return {
       cardId: this.selectedCard,
-      kind: "unit",
+      kind: this.selectedKind,
       playerId: LOCAL_PLAYER_ID,
-      x: point.x,
-      z: point.z,
-      laneId: road.lane.id,
-      routeId: routeId ?? "",
-      routeT: road.t,
+      x: result.position.x,
+      z: result.position.z,
+      laneId: result.laneId ?? "",
+      routeId: result.routeId ?? "",
+      routeT: result.routeDistance,
       direction,
       valid,
-      reason: !insideMap ? "outside-map" : !nearLane ? "outside-lane" : valid ? undefined : "enemy-zone",
+      reason,
     };
   }
 
@@ -1035,17 +988,21 @@ export class WorldRenderer {
   }
 
   private onPointerDown = (event: PointerEvent): void => {
-    if (event.button !== 0) return;
+    if (event.button < 0 || event.button > 2) return;
+    if (event.button === 1 || event.button === 2) event.preventDefault();
     this.canvas.focus({ preventScroll: true });
+    this.pointerInside = true;
     this.pointerDown = true;
     this.pointerDragged = false;
     this.pointerId = event.pointerId;
+    this.pointerButton = event.button;
     this.pointerX = event.clientX;
     this.pointerY = event.clientY;
     this.pointerDownX = event.clientX;
     this.pointerDownY = event.clientY;
+    if (event.button === 0 && this.selectedCard) this.updatePlacementFromClient(event.clientX, event.clientY);
     this.canvas.setPointerCapture(event.pointerId);
-    this.canvas.style.cursor = this.selectedCard ? "crosshair" : "grabbing";
+    this.canvas.style.cursor = event.button === 2 ? "grabbing" : event.button === 1 ? "move" : this.selectedCard ? "crosshair" : "grab";
   };
 
   private onPointerMove = (event: PointerEvent): void => {
@@ -1053,29 +1010,52 @@ export class WorldRenderer {
     const previousY = this.pointerY;
     this.pointerX = event.clientX;
     this.pointerY = event.clientY;
+    this.pointerInside = true;
     if (this.pointerDown && event.pointerId === this.pointerId) {
+      const dx = event.clientX - previousX;
+      const dy = event.clientY - previousY;
       const totalDistance = Math.hypot(event.clientX - this.pointerDownX, event.clientY - this.pointerDownY);
-      if (totalDistance > 5) this.pointerDragged = true;
-      if (this.pointerDragged && !this.selectedCard) {
+      if (totalDistance > 4) this.pointerDragged = true;
+      if (this.pointerDragged && this.pointerButton === 2) {
+        this.targetYaw -= dx * 0.006;
+        this.targetPitch = THREE.MathUtils.clamp(
+          this.targetPitch + dy * 0.0045,
+          MIN_CAMERA_PITCH,
+          MAX_CAMERA_PITCH,
+        );
+      } else if (this.pointerDragged && this.pointerButton === 1) {
         const rect = this.canvas.getBoundingClientRect();
-        const unitsPerPixel = this.fittedViewHeight(rect.width, rect.height) * this.zoom / Math.max(1, rect.height);
-        const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
-        const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
-        this.cameraTarget.addScaledVector(right, -(event.clientX - previousX) * unitsPerPixel);
-        this.cameraTarget.addScaledVector(forward, (event.clientY - previousY) * unitsPerPixel);
+        const worldHeight = 2 * this.targetDistance * Math.tan(THREE.MathUtils.degToRad(CAMERA_FOV) * 0.5);
+        const unitsPerPixel = worldHeight / Math.max(1, rect.height);
+        this.cameraRight.set(Math.cos(this.targetYaw), 0, -Math.sin(this.targetYaw));
+        this.cameraForward.set(-Math.sin(this.targetYaw), 0, -Math.cos(this.targetYaw));
+        this.desiredCameraTarget
+          .addScaledVector(this.cameraRight, -dx * unitsPerPixel)
+          .addScaledVector(this.cameraForward, dy * unitsPerPixel);
         this.clampCameraTarget();
       }
     }
-    if (!this.pointerDragged) this.updatePlacementFromClient(event.clientX, event.clientY);
+    if (this.selectedCard) this.updatePlacementFromClient(event.clientX, event.clientY);
   };
 
   private onPointerUp = (event: PointerEvent): void => {
     if (event.pointerId !== this.pointerId) return;
+    const releasedButton = this.pointerButton;
+    if (releasedButton === 0 && this.selectedCard) this.updatePlacementFromClient(event.clientX, event.clientY);
     if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
-    const shouldPlace = !this.pointerDragged && this.selectedCard !== null && this.currentPlacement?.valid === true;
+    const shouldPlace = releasedButton === 0
+      && !this.pointerDragged
+      && this.selectedCard !== null
+      && this.currentPlacement?.valid === true;
+    const shouldCancel = releasedButton === 2 && !this.pointerDragged && this.selectedCard !== null;
     this.pointerDown = false;
     this.pointerId = -1;
+    this.pointerButton = -1;
     this.canvas.style.cursor = this.selectedCard ? "crosshair" : "grab";
+    if (shouldCancel) {
+      this.callbacks.onCancelSelection?.();
+      return;
+    }
     if (shouldPlace && this.currentPlacement) {
       const placement = this.currentPlacement;
       this.callbacks.onDeploy?.(placement);
@@ -1085,22 +1065,39 @@ export class WorldRenderer {
 
   private onWheel = (event: WheelEvent): void => {
     event.preventDefault();
-    this.targetZoom = THREE.MathUtils.clamp(this.targetZoom * Math.exp(event.deltaY * 0.001), 0.42, 1.52);
+    this.pointerX = event.clientX;
+    this.pointerY = event.clientY;
+    const rect = this.canvas.getBoundingClientRect();
+    this.pointerNdc.set(
+      ((event.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+      -((event.clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    const hasAnchor = this.raycaster.ray.intersectPlane(this.groundPlane, this.zoomAnchor) !== null;
+    const previousDistance = this.targetDistance;
+    const nextDistance = THREE.MathUtils.clamp(
+      previousDistance * Math.exp(event.deltaY * 0.00115),
+      MIN_CAMERA_DISTANCE,
+      MAX_CAMERA_DISTANCE,
+    );
+    if (hasAnchor && previousDistance > 0.001) {
+      const ratio = nextDistance / previousDistance;
+      this.desiredCameraTarget.x += (this.zoomAnchor.x - this.desiredCameraTarget.x) * (1 - ratio);
+      this.desiredCameraTarget.z += (this.zoomAnchor.z - this.desiredCameraTarget.z) * (1 - ratio);
+      this.clampCameraTarget();
+    }
+    this.targetDistance = nextDistance;
+    if (this.selectedCard) this.updatePlacementFromClient(event.clientX, event.clientY);
   };
 
   private onKeyDown = (event: KeyboardEvent): void => {
     if (isTextInput(event.target)) return;
-    if (event.code === "KeyQ" && !event.repeat) {
+    if (event.code === "Escape") {
+      this.callbacks.onCancelSelection?.();
       event.preventDefault();
-      this.rotate(-1);
       return;
     }
-    if (event.code === "KeyE" && !event.repeat) {
-      event.preventDefault();
-      this.rotate(1);
-      return;
-    }
-    if (["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.code)) {
+    if (["KeyQ", "KeyE", "KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.code)) {
       this.pressedKeys.add(event.code);
       event.preventDefault();
     }
@@ -1110,11 +1107,22 @@ export class WorldRenderer {
     this.pressedKeys.delete(event.code);
   };
 
+  private onPointerEnter = (event: PointerEvent): void => {
+    this.pointerInside = true;
+    this.pointerX = event.clientX;
+    this.pointerY = event.clientY;
+  };
+
+  private onPointerLeave = (): void => {
+    if (!this.pointerDown) this.pointerInside = false;
+  };
   private onContextMenu = (event: MouseEvent): void => event.preventDefault();
 
   private bindEvents(): void {
     this.canvas.addEventListener("pointerdown", this.onPointerDown);
     this.canvas.addEventListener("pointermove", this.onPointerMove);
+    this.canvas.addEventListener("pointerenter", this.onPointerEnter);
+    this.canvas.addEventListener("pointerleave", this.onPointerLeave);
     this.canvas.addEventListener("pointerup", this.onPointerUp);
     this.canvas.addEventListener("pointercancel", this.onPointerUp);
     this.canvas.addEventListener("wheel", this.onWheel, { passive: false });
@@ -1128,6 +1136,8 @@ export class WorldRenderer {
   private unbindEvents(): void {
     this.canvas.removeEventListener("pointerdown", this.onPointerDown);
     this.canvas.removeEventListener("pointermove", this.onPointerMove);
+    this.canvas.removeEventListener("pointerenter", this.onPointerEnter);
+    this.canvas.removeEventListener("pointerleave", this.onPointerLeave);
     this.canvas.removeEventListener("pointerup", this.onPointerUp);
     this.canvas.removeEventListener("pointercancel", this.onPointerUp);
     this.canvas.removeEventListener("wheel", this.onWheel);

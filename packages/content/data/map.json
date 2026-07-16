@@ -1,25 +1,25 @@
 {
-  "version": "five-node-twelve-lane-1",
+  "version": "five-meter-centerlines-radius-60-2",
   "nodes": [
-    { "id": "north", "kind": "kingdom", "playerId": 0, "position": { "x": 0, "z": -50 } },
-    { "id": "east", "kind": "kingdom", "playerId": 1, "position": { "x": 50, "z": 0 } },
-    { "id": "south", "kind": "kingdom", "playerId": 2, "position": { "x": 0, "z": 50 } },
-    { "id": "west", "kind": "kingdom", "playerId": 3, "position": { "x": -50, "z": 0 } },
+    { "id": "north", "kind": "kingdom", "playerId": 0, "position": { "x": 0, "z": -60 } },
+    { "id": "east", "kind": "kingdom", "playerId": 1, "position": { "x": 60, "z": 0 } },
+    { "id": "south", "kind": "kingdom", "playerId": 2, "position": { "x": 0, "z": 60 } },
+    { "id": "west", "kind": "kingdom", "playerId": 3, "position": { "x": -60, "z": 0 } },
     { "id": "center", "kind": "center", "position": { "x": 0, "z": 0 } }
   ],
   "lanes": [
-    { "id": "outer_ne", "from": "north", "to": "east", "kind": "outer", "width": 5, "points": [{"x":0,"z":-50},{"x":30,"z":-63},{"x":63,"z":-30},{"x":50,"z":0}] },
-    { "id": "outer_se", "from": "east", "to": "south", "kind": "outer", "width": 5, "points": [{"x":50,"z":0},{"x":63,"z":30},{"x":30,"z":63},{"x":0,"z":50}] },
-    { "id": "outer_sw", "from": "south", "to": "west", "kind": "outer", "width": 5, "points": [{"x":0,"z":50},{"x":-30,"z":63},{"x":-63,"z":30},{"x":-50,"z":0}] },
-    { "id": "outer_nw", "from": "west", "to": "north", "kind": "outer", "width": 5, "points": [{"x":-50,"z":0},{"x":-63,"z":-30},{"x":-30,"z":-63},{"x":0,"z":-50}] },
-    { "id": "inner_ne", "from": "north", "to": "east", "kind": "inner", "width": 5, "points": [{"x":0,"z":-50},{"x":16,"z":-31},{"x":31,"z":-16},{"x":50,"z":0}] },
-    { "id": "inner_se", "from": "east", "to": "south", "kind": "inner", "width": 5, "points": [{"x":50,"z":0},{"x":31,"z":16},{"x":16,"z":31},{"x":0,"z":50}] },
-    { "id": "inner_sw", "from": "south", "to": "west", "kind": "inner", "width": 5, "points": [{"x":0,"z":50},{"x":-16,"z":31},{"x":-31,"z":16},{"x":-50,"z":0}] },
-    { "id": "inner_nw", "from": "west", "to": "north", "kind": "inner", "width": 5, "points": [{"x":-50,"z":0},{"x":-31,"z":-16},{"x":-16,"z":-31},{"x":0,"z":-50}] },
-    { "id": "radial_n", "from": "north", "to": "center", "kind": "radial", "width": 6, "points": [{"x":0,"z":-50},{"x":0,"z":-34},{"x":0,"z":-17},{"x":0,"z":0}] },
-    { "id": "radial_e", "from": "east", "to": "center", "kind": "radial", "width": 6, "points": [{"x":50,"z":0},{"x":34,"z":0},{"x":17,"z":0},{"x":0,"z":0}] },
-    { "id": "radial_s", "from": "south", "to": "center", "kind": "radial", "width": 6, "points": [{"x":0,"z":50},{"x":0,"z":34},{"x":0,"z":17},{"x":0,"z":0}] },
-    { "id": "radial_w", "from": "west", "to": "center", "kind": "radial", "width": 6, "points": [{"x":-50,"z":0},{"x":-34,"z":0},{"x":-17,"z":0},{"x":0,"z":0}] }
+    { "id": "outer_ne", "from": "north", "to": "east", "kind": "outer", "width": 5, "points": [{"x":0,"z":-60},{"x":32,"z":-56},{"x":56,"z":-32},{"x":60,"z":0}] },
+    { "id": "outer_se", "from": "east", "to": "south", "kind": "outer", "width": 5, "points": [{"x":60,"z":0},{"x":56,"z":32},{"x":32,"z":56},{"x":0,"z":60}] },
+    { "id": "outer_sw", "from": "south", "to": "west", "kind": "outer", "width": 5, "points": [{"x":0,"z":60},{"x":-32,"z":56},{"x":-56,"z":32},{"x":-60,"z":0}] },
+    { "id": "outer_nw", "from": "west", "to": "north", "kind": "outer", "width": 5, "points": [{"x":-60,"z":0},{"x":-56,"z":-32},{"x":-32,"z":-56},{"x":0,"z":-60}] },
+    { "id": "inner_ne", "from": "north", "to": "east", "kind": "inner", "width": 5, "points": [{"x":0,"z":-60},{"x":0,"z":-53},{"x":24,"z":-30},{"x":30,"z":-24},{"x":53,"z":0},{"x":60,"z":0}] },
+    { "id": "inner_se", "from": "east", "to": "south", "kind": "inner", "width": 5, "points": [{"x":60,"z":0},{"x":55,"z":0},{"x":28,"z":24},{"x":24,"z":28},{"x":0,"z":55},{"x":0,"z":60}] },
+    { "id": "inner_sw", "from": "south", "to": "west", "kind": "inner", "width": 5, "points": [{"x":0,"z":60},{"x":0,"z":57},{"x":-26,"z":28},{"x":-28,"z":26},{"x":-57,"z":0},{"x":-60,"z":0}] },
+    { "id": "inner_nw", "from": "west", "to": "north", "kind": "inner", "width": 5, "points": [{"x":-60,"z":0},{"x":-55,"z":0},{"x":-28,"z":-24},{"x":-24,"z":-28},{"x":0,"z":-55},{"x":0,"z":-60}] },
+    { "id": "radial_n", "from": "north", "to": "center", "kind": "radial", "width": 5, "points": [{"x":0,"z":-60},{"x":0,"z":0}] },
+    { "id": "radial_e", "from": "east", "to": "center", "kind": "radial", "width": 5, "points": [{"x":60,"z":0},{"x":0,"z":0}] },
+    { "id": "radial_s", "from": "south", "to": "center", "kind": "radial", "width": 5, "points": [{"x":0,"z":60},{"x":0,"z":0}] },
+    { "id": "radial_w", "from": "west", "to": "center", "kind": "radial", "width": 5, "points": [{"x":-60,"z":0},{"x":0,"z":0}] }
   ],
   "routes": [
     { "id": "p0_outer_w", "playerId": 0, "kind": "direct", "destinationPlayerId": 3, "steps": [{"laneId":"outer_nw","reverse":true}] },

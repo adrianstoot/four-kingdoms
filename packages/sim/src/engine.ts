@@ -16,7 +16,6 @@ import {
   buildRoutePaths,
   findPlacement,
   findSpellPlacement,
-  laneCenterClearance,
   nearestOnRoutePath,
   pointOnPolyline,
   sampleRoutePath,
@@ -39,6 +38,7 @@ import {
   type GameSnapshot,
   type PlayerSnapshot,
   type SimEvent,
+  type SpellCardId,
 } from './types';
 
 const playerIds: readonly PlayerId[] = [0, 1, 2, 3];
@@ -90,6 +90,15 @@ interface QueuedCommand {
   command: GameCommand;
   placement: Vec2;
   pathDistance: number;
+}
+
+interface PendingSpell {
+  castId: number;
+  playerId: PlayerId;
+  cardId: SpellCardId;
+  origin: Vec2;
+  destination: Vec2;
+  impactTick: number;
 }
 
 
@@ -151,6 +160,7 @@ class EntityStore {
   readonly maxHp: Int32Array;
   readonly state: Uint8Array;
   readonly stateTick: Uint16Array;
+  readonly motionPhase: Uint16Array;
   readonly targetId: Int32Array;
   readonly routeIndex: Int16Array;
   readonly routeDistance: Float32Array;
@@ -176,6 +186,7 @@ class EntityStore {
     this.maxHp = new Int32Array(capacity);
     this.state = new Uint8Array(capacity);
     this.stateTick = new Uint16Array(capacity);
+    this.motionPhase = new Uint16Array(capacity);
     this.targetId = new Int32Array(capacity);
     this.routeIndex = new Int16Array(capacity);
     this.routeDistance = new Float32Array(capacity);
@@ -219,6 +230,7 @@ class EntityStore {
     this.maxHp[index] = values.hp;
     this.state[index] = EntityStateCode.Spawn;
     this.stateTick[index] = 0;
+    this.motionPhase[index] = 0;
     this.targetId[index] = -1;
     this.routeIndex[index] = values.routeIndex;
     this.routeDistance[index] = values.routeDistance;
@@ -264,6 +276,8 @@ export class GameSimulation {
   }));
   private bots = new Set<PlayerId>();
   private events: SimEvent[] = [];
+  private pendingSpells: PendingSpell[] = [];
+  private nextCastId = 1;
   private paused = false;
   private tick = 0;
   private phase: 'playing' | 'finished' = 'playing';
@@ -371,6 +385,7 @@ export class GameSimulation {
     this.updateEconomy();
     this.updateBots();
     this.executeCommands();
+    this.resolvePendingSpells();
     this.updateEntities();
     this.updateCenter();
     this.updateAttrition();
@@ -417,10 +432,10 @@ export class GameSimulation {
       const urgentDefense = threat.castle !== null && threat.score >= BOT_URGENT_THREAT_SCORE;
       const fireAim = this.findBestFireballAim(playerId, spellCandidates, spatial);
       const fireWorthwhile = fireAim !== null
-        && (fireAim.hits >= 3 || (urgentDefense && fireAim.hits >= 2) || fireAim.score >= 690);
+        && (fireAim.hits >= 2 || (urgentDefense && fireAim.hits >= 1) || fireAim.score >= 300);
       const chainAim = this.findBestChainAim(playerId, spellCandidates, spatial);
       const chainWorthwhile = chainAim !== null
-        && (chainAim.hits >= 3 || (urgentDefense && chainAim.hits >= 2) || chainAim.score >= 470);
+        && (chainAim.hits >= 2 || (urgentDefense && chainAim.hits >= 1) || chainAim.score >= 200);
       const teamOwnsCenter = this.center.ownerPlayerId !== null
         && teamForPlayer(this.center.ownerPlayerId) === teamForPlayer(playerId);
       const setupObjective: 'center' | 'offense' = teamOwnsCenter ? 'offense' : 'center';
@@ -852,61 +867,91 @@ export class GameSimulation {
     const definition = ARCHETYPES_BY_ID[archetypeId];
     const archetype = archetypeCodes[archetypeId];
     const kind = definition.kind === 'building' ? EntityKindCode.Building : EntityKindCode.Unit;
-    for (let member = 0; member < card.count; member += 1) {
-      const requestedOffset = card.count === 1 ? 0 : (member - (card.count - 1) / 2) * 0.85;
-      const routeDistance = route ? Math.min(route.length, pathDistance + member * 0.32) : pathDistance;
-      const sample = route ? sampleRoutePath(route, routeDistance) : null;
-      const maximumOffset = sample && kind === EntityKindCode.Unit
-        ? laneCenterClearance(sample.laneWidth, definition.radius)
-        : 0;
-      const laneOffset = Math.max(-maximumOffset, Math.min(maximumOffset, requestedOffset));
-      const unitPosition = kind === EntityKindCode.Unit && sample
-        ? {
-          x: sample.position.x + Math.cos(sample.yaw) * laneOffset,
-          z: sample.position.z - Math.sin(sample.yaw) * laneOffset,
-        }
-        : position;
-      const id = this.entities.spawn({
-        kind,
-        archetype,
-        owner: playerId,
-        x: unitPosition.x,
-        z: unitPosition.z,
-        yaw: sample?.yaw ?? 0,
-        hp: definition.maxHp,
-        routeIndex,
-        routeDistance,
-        laneOffset,
-        lifetime: definition.kind === 'building' ? definition.lifetimeTicks : -1,
-        cardCost: card.cost,
-      });
-      if (id >= 0) this.events.push({ type: 'spawn', tick: this.tick, entityId: id, playerId, archetype });
-    }
+    const routeDistance = route ? Math.min(route.length, pathDistance) : pathDistance;
+    const sample = route ? sampleRoutePath(route, routeDistance) : null;
+    const entityPosition = kind === EntityKindCode.Unit && sample ? sample.position : position;
+    const id = this.entities.spawn({
+      kind,
+      archetype,
+      owner: playerId,
+      x: entityPosition.x,
+      z: entityPosition.z,
+      yaw: sample?.yaw ?? 0,
+      hp: definition.maxHp,
+      routeIndex,
+      routeDistance,
+      laneOffset: 0,
+      lifetime: definition.kind === 'building' ? definition.lifetimeTicks : -1,
+      cardCost: card.cost,
+    });
+    if (id >= 0) this.events.push({ type: 'spawn', tick: this.tick, entityId: id, playerId, archetype });
   }
 
-  private castSpell(playerId: PlayerId, cardId: 'fireball' | 'chain_lightning', position: Vec2): void {
-    const card = CARDS_BY_ID[cardId];
+  private castSpell(playerId: PlayerId, cardId: SpellCardId, destination: Vec2): void {
+    const castle = this.castles[playerId];
+    const origin = { x: castle?.x ?? destination.x, z: castle?.z ?? destination.z };
+    const distance = Math.hypot(destination.x - origin.x, destination.z - origin.z);
+    const travelTicks = cardId === 'fireball'
+      ? Math.max(9, Math.min(24, Math.round(9 + distance * 0.125)))
+      : 12;
+    const pending: PendingSpell = {
+      castId: this.nextCastId++,
+      playerId,
+      cardId,
+      origin,
+      destination: { ...destination },
+      impactTick: this.tick + travelTicks,
+    };
+    this.pendingSpells.push(pending);
+    this.events.push({
+      type: 'spell-cast',
+      tick: this.tick,
+      castId: pending.castId,
+      playerId,
+      cardId,
+      origin: pending.origin,
+      destination: pending.destination,
+      impactTick: pending.impactTick,
+    });
+  }
+
+  private resolvePendingSpells(): void {
+    const due = this.pendingSpells
+      .filter((pending) => pending.impactTick <= this.tick)
+      .sort((left, right) => left.impactTick - right.impactTick || left.castId - right.castId);
+    if (due.length === 0) return;
+    const dueIds = new Set(due.map((pending) => pending.castId));
+    this.pendingSpells = this.pendingSpells.filter((pending) => !dueIds.has(pending.castId));
+    for (const pending of due) this.resolveSpellImpact(pending);
+  }
+
+  private resolveSpellImpact(pending: PendingSpell): void {
+    const card = CARDS_BY_ID[pending.cardId];
     if (card.kind !== 'spell') return;
     const targets: number[] = [];
     if (card.spell === 'area') {
       for (let index = 0; index < this.entities.capacity; index += 1) {
-        if (!this.isLivingEnemy(index, playerId)) continue;
-        if (Math.hypot(this.entities.x[index]! - position.x, this.entities.z[index]! - position.z) <= card.radius) {
+        if (!this.isLivingEnemy(index, pending.playerId)) continue;
+        if (Math.hypot(this.entities.x[index]! - pending.destination.x, this.entities.z[index]! - pending.destination.z) <= card.radius) {
           targets.push(this.entities.id[index]!);
           this.damageEntity(index, card.damage, 0);
         }
       }
     } else {
-      let cursor = position;
+      let cursor = pending.destination;
       let damage = card.damage;
       const used = new Set<number>();
       for (let jump = 0; jump < card.maxTargets; jump += 1) {
         let best = -1;
         let bestDistance = jump === 0 ? card.radius : card.chainRange;
         for (let index = 0; index < this.entities.capacity; index += 1) {
-          if (!this.isLivingEnemy(index, playerId) || used.has(index)) continue;
+          if (!this.isLivingEnemy(index, pending.playerId) || used.has(index)) continue;
           const distance = Math.hypot(this.entities.x[index]! - cursor.x, this.entities.z[index]! - cursor.z);
-          if (distance <= bestDistance) { best = index; bestDistance = distance; }
+          const bestId = best >= 0 ? this.entities.id[best]! : Number.POSITIVE_INFINITY;
+          if (distance < bestDistance || (Math.abs(distance - bestDistance) < 1e-6 && this.entities.id[index]! < bestId)) {
+            best = index;
+            bestDistance = distance;
+          }
         }
         if (best < 0) break;
         used.add(best);
@@ -916,7 +961,17 @@ export class GameSimulation {
         damage = Math.max(1, Math.round(damage * card.falloffBps / 10_000));
       }
     }
-    this.events.push({ type: 'spell', tick: this.tick, playerId, cardId, position, targetIds: targets });
+    this.events.push({
+      type: 'spell-impact',
+      tick: this.tick,
+      castId: pending.castId,
+      playerId: pending.playerId,
+      cardId: pending.cardId,
+      origin: pending.origin,
+      destination: pending.destination,
+      impactTick: pending.impactTick,
+      targetIds: targets,
+    });
   }
 
   private updateEntities(): void {
@@ -925,10 +980,23 @@ export class GameSimulation {
       if (this.entities.active[index] === 0) continue;
       this.entities.stateTick[index] = Math.min(65_535, this.entities.stateTick[index]! + 1);
       if (this.entities.state[index] === EntityStateCode.Death) {
+        this.updateMotionPhase(index, 14);
         if (this.entities.stateTick[index]! >= 14) this.entities.remove(index);
         continue;
       }
-      if (this.entities.state[index] === EntityStateCode.Spawn && this.entities.stateTick[index]! > 8) this.setEntityState(index, EntityStateCode.Idle);
+
+      const definition = this.definitionAt(index);
+      if (this.entities.state[index] === EntityStateCode.Spawn) {
+        this.updateMotionPhase(index, 8);
+        if (this.entities.stateTick[index]! <= 8) continue;
+        this.setEntityState(index, EntityStateCode.Idle);
+      }
+      if (this.entities.state[index] !== EntityStateCode.Walk) {
+        const cycleTicks = this.entities.state[index] === EntityStateCode.Attack
+          ? definition.attackCooldownTicks
+          : this.entities.state[index] === EntityStateCode.Hit ? 8 : 40;
+        this.updateMotionPhase(index, cycleTicks);
+      }
       if (this.entities.attackCooldown[index]! > 0) this.entities.attackCooldown[index] = this.entities.attackCooldown[index]! - 1;
       if (this.entities.lifetime[index]! > 0) {
         this.entities.lifetime[index] = this.entities.lifetime[index]! - 1;
@@ -936,34 +1004,53 @@ export class GameSimulation {
       }
 
       const owner = this.entities.owner[index] as PlayerId;
-      const definition = this.definitionAt(index);
       const target = this.findCombatTarget(index, definition, spatial);
       if (target >= 0) {
         const dx = this.entities.x[target]! - this.entities.x[index]!;
         const dz = this.entities.z[target]! - this.entities.z[index]!;
         const distance = Math.hypot(dx, dz);
-        const targetRadius = this.definitionAt(target).radius;
-        this.entities.targetId[index] = this.entities.id[target]!;
+        const targetRadius = this.definitionAt(target).physicalRadius;
+        const targetId = this.entities.id[target]!;
+        if (this.entities.targetId[index] !== targetId && this.entities.state[index] === EntityStateCode.Attack) {
+          this.setEntityState(index, EntityStateCode.Idle);
+        }
+        this.entities.targetId[index] = targetId;
         if (distance <= definition.attackRange + targetRadius) {
           this.setEntityState(index, EntityStateCode.Attack);
           this.entities.yaw[index] = Math.atan2(dx, dz);
-          if (this.entities.attackCooldown[index]! <= 0) {
+          if (
+            this.entities.attackCooldown[index]! <= 0
+            && this.entities.stateTick[index]! >= definition.attackAnticipationTicks
+          ) {
             this.damageEntity(target, definition.damage, this.entities.id[index]!);
             this.entities.attackCooldown[index] = definition.attackCooldownTicks;
+            this.entities.stateTick[index] = 0;
           }
           continue;
         }
-        if (definition.kind === 'unit' && this.canPursue(index, target, definition)) {
-          this.setEntityState(index, EntityStateCode.Walk);
-          this.moveEntityToward(
-            index,
-            this.entities.x[target]!,
-            this.entities.z[target]!,
-            definition.moveSpeed / TICK_RATE,
-            spatial,
-            0.45,
-          );
-          continue;
+        if (definition.kind === 'unit') {
+          const route = this.routePaths[this.entities.routeIndex[index]!];
+          if (route) {
+            const currentDistance = this.entities.routeDistance[index]!;
+            const pursuit = nearestOnRoutePath(
+              route,
+              { x: this.entities.x[target]!, z: this.entities.z[target]! },
+              currentDistance,
+              Math.min(route.length, currentDistance + definition.aggroRange + 3),
+            );
+            if (
+              pursuit.routeDistance > currentDistance + 0.001
+              && pursuit.lateralDistance <= definition.attackRange + targetRadius
+            ) {
+              this.setEntityState(index, EntityStateCode.Walk);
+              this.advanceUnitOnRoute(
+                index,
+                Math.min(pursuit.routeDistance, currentDistance + definition.moveSpeed / TICK_RATE),
+                spatial,
+              );
+              continue;
+            }
+          }
         }
         this.entities.targetId[index] = -1;
       } else {
@@ -976,28 +1063,29 @@ export class GameSimulation {
       }
       const route = this.routePaths[this.entities.routeIndex[index]!];
       if (!route || definition.kind !== 'unit') continue;
-      const atCenter = route.kind === 'center' && Math.abs(this.entities.routeDistance[index]! - route.centerDistance) < 2.2;
+      const currentDistance = this.entities.routeDistance[index]!;
+      const atCenter = route.kind === 'center' && Math.abs(currentDistance - route.centerDistance) < 0.35;
       const teamControlsCenter = this.center.ownerPlayerId !== null && !this.isEnemyPlayer(owner, this.center.ownerPlayerId);
       if (atCenter && !teamControlsCenter) {
         this.setEntityState(index, EntityStateCode.Idle);
         continue;
       }
-      if (this.entities.routeDistance[index]! >= route.length - 2.2) {
+
+      const castleAttackDistance = Math.max(0, route.length - definition.attackRange - 2.4);
+      if (currentDistance >= castleAttackDistance) {
         const castle = this.castles[route.destinationPlayerId];
         if (castle?.alive && this.isEnemyPlayer(owner, castle.playerId)) {
-          const distance = Math.hypot(castle.x - this.entities.x[index]!, castle.z - this.entities.z[index]!);
-          if (distance > definition.attackRange + 2.4) {
-            this.setEntityState(index, EntityStateCode.Walk);
-            this.moveEntityToward(index, castle.x, castle.z, definition.moveSpeed / TICK_RATE, spatial, 0.35);
-            continue;
-          }
           this.setEntityState(index, EntityStateCode.Attack);
           this.entities.yaw[index] = Math.atan2(castle.x - this.entities.x[index]!, castle.z - this.entities.z[index]!);
-          if (this.entities.attackCooldown[index]! <= 0) {
+          if (
+            this.entities.attackCooldown[index]! <= 0
+            && this.entities.stateTick[index]! >= definition.attackAnticipationTicks
+          ) {
             const multiplier = this.tick >= CONTENT.balance.doubleElixirTick ? 1.5 : 1;
             const damage = Math.round(definition.damage * multiplier);
             castle.hp = Math.max(0, castle.hp - damage);
             this.entities.attackCooldown[index] = definition.attackCooldownTicks;
+            this.entities.stateTick[index] = 0;
             this.events.push({ type: 'damage', tick: this.tick, sourceId: this.entities.id[index]!, targetType: 'castle', targetId: castle.playerId, amount: damage });
           }
         } else {
@@ -1007,21 +1095,50 @@ export class GameSimulation {
       }
 
       this.setEntityState(index, EntityStateCode.Walk);
-      const currentSample = sampleRoutePath(route, this.entities.routeDistance[index]!);
-      const currentLaneOffset = this.clampedLaneOffset(index, currentSample.laneWidth);
-      const currentTargetX = currentSample.position.x + Math.cos(currentSample.yaw) * currentLaneOffset;
-      const currentTargetZ = currentSample.position.z - Math.sin(currentSample.yaw) * currentLaneOffset;
-      const displaced = Math.hypot(this.entities.x[index]! - currentTargetX, this.entities.z[index]! - currentTargetZ) > 1.15;
-      if (displaced) {
-        this.moveEntityToward(index, currentTargetX, currentTargetZ, definition.moveSpeed / TICK_RATE, spatial, 0.25);
-        continue;
-      }
-      this.entities.routeDistance[index] = Math.min(route.length, this.entities.routeDistance[index]! + definition.moveSpeed / TICK_RATE);
-      const sample = sampleRoutePath(route, this.entities.routeDistance[index]!);
-      const laneOffset = this.clampedLaneOffset(index, sample.laneWidth);
-      const targetX = sample.position.x + Math.cos(sample.yaw) * laneOffset;
-      const targetZ = sample.position.z - Math.sin(sample.yaw) * laneOffset;
-      this.moveEntityToward(index, targetX, targetZ, definition.moveSpeed / TICK_RATE, spatial, 0.3);
+      this.advanceUnitOnRoute(index, Math.min(route.length, currentDistance + definition.moveSpeed / TICK_RATE), spatial);
+    }
+  }
+
+  private updateMotionPhase(index: number, cycleTicks: number): void {
+    const cycle = Math.max(1, cycleTicks);
+    this.entities.motionPhase[index] = Math.round((this.entities.stateTick[index]! % cycle) / cycle * 65_535);
+  }
+
+  private advanceUnitOnRoute(index: number, requestedDistance: number, spatial: Map<string, number[]>): void {
+    const routeIndex = this.entities.routeIndex[index]!;
+    const route = this.routePaths[routeIndex];
+    if (!route) return;
+    const currentDistance = this.entities.routeDistance[index]!;
+    let nextDistance = Math.max(currentDistance, Math.min(route.length, requestedDistance));
+    const definition = this.definitionAt(index);
+    const nearby = this.indicesNear(this.entities.x[index]!, this.entities.z[index]!, 4.5, spatial);
+    for (const candidate of nearby) {
+      if (
+        candidate === index
+        || this.entities.kind[candidate] !== EntityKindCode.Unit
+        || this.entities.state[candidate] === EntityStateCode.Death
+        || this.entities.routeIndex[candidate] !== routeIndex
+        || teamForPlayer(this.entities.owner[candidate] as PlayerId) !== teamForPlayer(this.entities.owner[index] as PlayerId)
+      ) continue;
+      const candidateDistance = this.entities.routeDistance[candidate]!;
+      const candidateIsAhead = candidateDistance > currentDistance + 0.001
+        || (Math.abs(candidateDistance - currentDistance) <= 0.001 && this.entities.id[candidate]! < this.entities.id[index]!);
+      if (!candidateIsAhead) continue;
+      const gap = definition.physicalRadius + this.definitionAt(candidate).physicalRadius + 0.12;
+      nextDistance = Math.min(nextDistance, candidateDistance - gap);
+    }
+    nextDistance = Math.max(currentDistance, nextDistance);
+    const travelled = nextDistance - currentDistance;
+    const sample = sampleRoutePath(route, nextDistance);
+    this.entities.routeDistance[index] = nextDistance;
+    this.entities.laneOffset[index] = 0;
+    this.entities.x[index] = sample.position.x;
+    this.entities.z[index] = sample.position.z;
+    this.entities.yaw[index] = sample.yaw;
+    if (travelled > 0) {
+      const stride = Math.max(0.45, definition.height * 0.55);
+      const phaseDelta = Math.round(travelled / stride * 65_535);
+      this.entities.motionPhase[index] = (this.entities.motionPhase[index]! + phaseDelta) & 0xffff;
     }
   }
   private retargetAtNode(index: number, nodePlayerId: PlayerId): void {
@@ -1031,6 +1148,12 @@ export class GameSimulation {
     const route = alternatives.sort((left, right) => left.destinationPlayerId - right.destinationPlayerId)[0]!;
     this.entities.routeIndex[index] = this.routeById.get(route.routeId) ?? -1;
     this.entities.routeDistance[index] = 0;
+    this.entities.laneOffset[index] = 0;
+    const sample = sampleRoutePath(route, 0);
+    this.entities.x[index] = sample.position.x;
+    this.entities.z[index] = sample.position.z;
+    this.entities.yaw[index] = sample.yaw;
+    this.setEntityState(index, EntityStateCode.Walk);
   }
 
   private updateCenter(): void {
@@ -1185,150 +1308,6 @@ export class GameSimulation {
     return score;
   }
 
-  private canPursue(index: number, target: number, definition: UnitDefinition): boolean {
-    const route = this.routePaths[this.entities.routeIndex[index]!];
-    if (!route) return false;
-    const anchorSample = sampleRoutePath(route, this.entities.routeDistance[index]!);
-    const anchorLaneOffset = this.clampedLaneOffset(index, anchorSample.laneWidth);
-    const anchorX = anchorSample.position.x + Math.cos(anchorSample.yaw) * anchorLaneOffset;
-    const anchorZ = anchorSample.position.z - Math.sin(anchorSample.yaw) * anchorLaneOffset;
-    const distanceFromAnchor = Math.hypot(this.entities.x[index]! - anchorX, this.entities.z[index]! - anchorZ);
-    const targetFromAnchor = Math.hypot(this.entities.x[target]! - anchorX, this.entities.z[target]! - anchorZ);
-    const leash = this.entities.archetype[index] === ArchetypeCode.Giant ? 6.25 : 4.75;
-    const targetNearest = nearestOnRoutePath(
-      route,
-      { x: this.entities.x[target]!, z: this.entities.z[target]! },
-      Math.max(0, this.entities.routeDistance[index]! - leash),
-      Math.min(route.length, this.entities.routeDistance[index]! + definition.aggroRange + leash),
-    );
-    const targetRadius = this.definitionAt(target).radius;
-    const maximumReach = laneCenterClearance(targetNearest.laneWidth, definition.radius)
-      + definition.attackRange + targetRadius;
-    if (targetNearest.lateralDistance > maximumReach) return false;
-    return distanceFromAnchor <= leash && targetFromAnchor <= definition.aggroRange + leash;
-  }
-
-  private clampedLaneOffset(index: number, laneWidth: number): number {
-    const clearance = laneCenterClearance(laneWidth, this.definitionAt(index).radius);
-    const offset = Math.max(-clearance, Math.min(clearance, this.entities.laneOffset[index]!));
-    this.entities.laneOffset[index] = offset;
-    return offset;
-  }
-
-  private constrainUnitToRoute(index: number, desiredX: number, desiredZ: number): Vec2 {
-    if (this.entities.kind[index] !== EntityKindCode.Unit) return { x: desiredX, z: desiredZ };
-    const route = this.routePaths[this.entities.routeIndex[index]!];
-    if (!route) return { x: desiredX, z: desiredZ };
-    const routeDistance = this.entities.routeDistance[index]!;
-    const nearest = nearestOnRoutePath(
-      route,
-      { x: desiredX, z: desiredZ },
-      Math.max(0, routeDistance - 7),
-      Math.min(route.length, routeDistance + 8.5),
-    );
-    const clearance = laneCenterClearance(nearest.laneWidth, this.definitionAt(index).radius);
-    const normalX = Math.cos(nearest.yaw);
-    const normalZ = -Math.sin(nearest.yaw);
-    const signedLateral = (desiredX - nearest.position.x) * normalX + (desiredZ - nearest.position.z) * normalZ;
-    const clampedLateral = Math.max(-clearance, Math.min(clearance, signedLateral));
-    if (nearest.routeDistance > routeDistance) {
-      this.entities.routeDistance[index] = Math.min(route.length, nearest.routeDistance);
-    }
-    return {
-      x: nearest.position.x + normalX * clampedLateral,
-      z: nearest.position.z + normalZ * clampedLateral,
-    };
-  }
-
-  private moveEntityToward(
-    index: number,
-    targetX: number,
-    targetZ: number,
-    maximumStep: number,
-    spatial: Map<string, number[]>,
-    separationWeight: number,
-  ): void {
-    const dx = targetX - this.entities.x[index]!;
-    const dz = targetZ - this.entities.z[index]!;
-    const distance = Math.hypot(dx, dz);
-    if (distance <= 0.0001) return;
-    const directionX = dx / distance;
-    const directionZ = dz / distance;
-    const separation = this.separationVector(index, spatial);
-    let moveX = directionX + separation.x * separationWeight;
-    let moveZ = directionZ + separation.z * separationWeight;
-    const forwardDot = moveX * directionX + moveZ * directionZ;
-    if (forwardDot < 0.28) { moveX = directionX; moveZ = directionZ; }
-    const moveLength = Math.hypot(moveX, moveZ) || 1;
-    const step = Math.min(maximumStep, distance);
-    const startX = this.entities.x[index]!;
-    const startZ = this.entities.z[index]!;
-    const constrained = this.constrainUnitToRoute(
-      index,
-      startX + moveX / moveLength * step,
-      startZ + moveZ / moveLength * step,
-    );
-    const actualX = constrained.x - startX;
-    const actualZ = constrained.z - startZ;
-    this.entities.x[index] = constrained.x;
-    this.entities.z[index] = constrained.z;
-    if (Math.hypot(actualX, actualZ) > 0.0001) this.entities.yaw[index] = Math.atan2(actualX, actualZ);
-  }
-
-  private separationVector(index: number, spatial: Map<string, number[]>): Vec2 {
-    if (this.entities.kind[index] !== EntityKindCode.Unit) return { x: 0, z: 0 };
-    const ownerTeam = teamForPlayer(this.entities.owner[index] as PlayerId);
-    const definition = this.definitionAt(index);
-    const searchRange = definition.radius + 2.1;
-    let pushX = 0;
-    let pushZ = 0;
-    for (const candidate of this.indicesNear(this.entities.x[index]!, this.entities.z[index]!, searchRange, spatial)) {
-      if (
-        candidate === index
-        || this.entities.kind[candidate] !== EntityKindCode.Unit
-        || this.entities.state[candidate] === EntityStateCode.Death
-        || teamForPlayer(this.entities.owner[candidate] as PlayerId) !== ownerTeam
-      ) continue;
-      let dx = this.entities.x[index]! - this.entities.x[candidate]!;
-      let dz = this.entities.z[index]! - this.entities.z[candidate]!;
-      let distance = Math.hypot(dx, dz);
-      const minimum = (definition.radius + this.definitionAt(candidate).radius) * 0.92;
-      if (distance >= minimum) continue;
-      if (distance < 0.0001) {
-        const direction = this.entities.id[index]! < this.entities.id[candidate]! ? -1 : 1;
-        dx = direction;
-        dz = ((this.entities.id[index]! + this.entities.id[candidate]!) & 1) === 0 ? direction : -direction;
-        distance = Math.SQRT2;
-      }
-      const strength = (minimum - distance) / Math.max(0.1, minimum);
-      pushX += dx / distance * strength;
-      pushZ += dz / distance * strength;
-    }
-    const length = Math.hypot(pushX, pushZ);
-    const result = length > 1 ? { x: pushX / length, z: pushZ / length } : { x: pushX, z: pushZ };
-    const route = this.routePaths[this.entities.routeIndex[index]!];
-    if (!route || (result.x === 0 && result.z === 0)) return result;
-    const routeDistance = this.entities.routeDistance[index]!;
-    const nearest = nearestOnRoutePath(
-      route,
-      { x: this.entities.x[index]!, z: this.entities.z[index]! },
-      Math.max(0, routeDistance - 4),
-      Math.min(route.length, routeDistance + 4),
-    );
-    const clearance = laneCenterClearance(nearest.laneWidth, definition.radius);
-    const normalX = Math.cos(nearest.yaw);
-    const normalZ = -Math.sin(nearest.yaw);
-    const signedLateral = (this.entities.x[index]! - nearest.position.x) * normalX
-      + (this.entities.z[index]! - nearest.position.z) * normalZ;
-    const side = Math.sign(signedLateral);
-    if (side === 0) return result;
-    const outward = (result.x * normalX + result.z * normalZ) * side;
-    if (outward <= 0) return result;
-    const remaining = Math.max(0, clearance - Math.abs(signedLateral));
-    const outwardScale = Math.min(1, remaining / 0.55);
-    const removed = outward * (1 - outwardScale) * side;
-    return { x: result.x - normalX * removed, z: result.z - normalZ * removed };
-  }
   private damageEntity(index: number, amount: number, sourceId: number): void {
     if (this.entities.active[index] === 0 || this.entities.state[index] === EntityStateCode.Death) return;
     this.entities.hp[index] = Math.max(0, this.entities.hp[index]! - amount);
@@ -1352,6 +1331,7 @@ export class GameSimulation {
     if (this.entities.state[index] === state) return;
     this.entities.state[index] = state;
     this.entities.stateTick[index] = 0;
+    this.entities.motionPhase[index] = 0;
   }
 
   private isEnemyPlayer(left: PlayerId, right: PlayerId): boolean {
@@ -1384,22 +1364,19 @@ export class GameSimulation {
     const limit = Math.min(Math.max(0, Math.floor(count)), this.maxEntities - this.entities.count);
     let spawned = 0;
     for (let member = 0; member < limit; member += 1) {
-      const distance = Math.min(route.length, member * 0.32);
+      const distance = Math.min(route.length, member * 1.05);
       const sample = sampleRoutePath(route, distance);
-      const requestedOffset = limit === 1 ? 0 : (member - (limit - 1) / 2) * 0.85;
-      const clearance = laneCenterClearance(sample.laneWidth, definition.radius);
-      const laneOffset = Math.max(-clearance, Math.min(clearance, requestedOffset));
       const id = this.entities.spawn({
         kind: EntityKindCode.Unit,
         archetype: ArchetypeCode.Guard,
         owner: route.playerId,
-        x: sample.position.x + Math.cos(sample.yaw) * laneOffset,
-        z: sample.position.z - Math.sin(sample.yaw) * laneOffset,
+        x: sample.position.x,
+        z: sample.position.z,
         yaw: sample.yaw,
         hp: definition.maxHp,
         routeIndex,
         routeDistance: distance,
-        laneOffset,
+        laneOffset: 0,
         cardCost: 0,
       });
       if (id >= 0) spawned += 1;
@@ -1418,7 +1395,7 @@ export class GameSimulation {
       const sample = sampleRoutePath(route, distance);
       const code = ((index % 5) + 1) as ArchetypeCode;
       const definition = ARCHETYPES_BY_ID[archetypeIds[code]!];
-      if (this.entities.spawn({ kind: EntityKindCode.Unit, archetype: code, owner: playerId, x: sample.position.x, z: sample.position.z, yaw: sample.yaw, hp: definition.maxHp, routeIndex: this.routeById.get(route.routeId) ?? -1, routeDistance: distance, laneOffset: (index % 3 - 1) * 0.7, cardCost: 0 }) >= 0) spawned += 1;
+      if (this.entities.spawn({ kind: EntityKindCode.Unit, archetype: code, owner: playerId, x: sample.position.x, z: sample.position.z, yaw: sample.yaw, hp: definition.maxHp, routeIndex: this.routeById.get(route.routeId) ?? -1, routeDistance: distance, laneOffset: 0, cardCost: 0 }) >= 0) spawned += 1;
     }
     return spawned;
   }
@@ -1436,6 +1413,7 @@ export class GameSimulation {
     const maxHp = new Uint16Array(count);
     const state = new Uint8Array(count);
     const stateTick = new Uint16Array(count);
+    const motionPhase = new Uint16Array(count);
     const targetId = new Int32Array(count);
     let cursor = 0;
     for (let index = 0; index < this.entities.capacity; index += 1) {
@@ -1453,6 +1431,7 @@ export class GameSimulation {
       state[cursor] = this.entities.state[index]!;
       stateTick[cursor] = this.entities.stateTick[index]!;
       targetId[cursor] = this.entities.targetId[index]!;
+      motionPhase[cursor] = this.entities.motionPhase[index]!;
       cursor += 1;
     }
     const players: PlayerSnapshot[] = this.players.map((player) => ({
@@ -1480,7 +1459,7 @@ export class GameSimulation {
       players,
       castles,
       center,
-      entities: { count, id, kind, archetype, owner, x, z, yaw, hp, maxHp, state, stateTick, targetId },
+      entities: { count, id, kind, archetype, owner, x, z, yaw, hp, maxHp, state, stateTick, motionPhase, targetId },
       events: [...this.events],
     };
     snapshot.stateHash = this.hashSnapshot(snapshot);
@@ -1498,6 +1477,18 @@ export class GameSimulation {
       add(snapshot.entities.x[index]!);
       add(snapshot.entities.z[index]!);
       add(snapshot.entities.hp[index]!);
+      add(snapshot.entities.state[index]!);
+      add(snapshot.entities.stateTick[index]!);
+      add(snapshot.entities.motionPhase[index]!);
+    }
+    add(this.nextCastId);
+    for (const pending of this.pendingSpells) {
+      add(pending.castId);
+      add(pending.playerId);
+      add(pending.cardId === 'fireball' ? 1 : 2);
+      add(pending.impactTick);
+      add(Math.round(pending.destination.x * POSITION_SCALE));
+      add(Math.round(pending.destination.z * POSITION_SCALE));
     }
     return hash >>> 0;
   }

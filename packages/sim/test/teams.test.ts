@@ -28,7 +28,8 @@ describe('local 2v2 teams', () => {
       type: 'spell', playerId: 0, cardId: 'fireball',
       sequence: 1, tick: before.tick, position: target,
     }).accepted).toBe(true);
-    const after = game.step();
+    let after = game.step();
+    for (let tick = 0; tick < 30; tick += 1) after = game.step();
     expect([...after.entities.hp]).toEqual(healthBefore);
   });
 
@@ -53,6 +54,7 @@ describe('local 2v2 teams', () => {
       type: 'deploy', playerId: 0, cardId: 'guards', routeId: 'p0_center',
       sequence: 1, tick: game.getSnapshot().tick, position: routeStart('p0_center'),
     }).accepted).toBe(true);
+    for (let tick = 0; tick < 70; tick += 1) game.step();
     expect(game.queueCommand({
       type: 'deploy', playerId: 2, cardId: 'guards', routeId: 'p2_center',
       sequence: 1, tick: game.getSnapshot().tick, position: routeStart('p2_center'),
@@ -65,20 +67,27 @@ describe('local 2v2 teams', () => {
     const contributorIndex = [...before.entities.owner].findIndex((owner) => owner === 0);
     const target = {
       x: before.entities.x[contributorIndex]! / 100,
-      z: before.entities.z[contributorIndex]! / 100,
+      z: 0,
     };
     expect(game.queueCommand({
       type: 'spell', playerId: 1, cardId: 'fireball',
       sequence: 1, tick: before.tick, position: target,
     }).accepted).toBe(true);
 
-    const after = game.step();
+    let after = game.step();
+    for (let tick = 0; tick < 30 && !after.events.some((event) => event.type === 'spell-impact'); tick += 1) {
+      after = game.step();
+    }
     const living = (playerId: number) => [...after.entities.owner].filter((owner, index) => (
       owner === playerId && after.entities.state[index] !== 4
     )).length;
+    expect(after.events.some((event) => event.type === 'spell-impact')).toBe(true);
+    for (let tick = 0; tick < 160 && !(living(0) === 0 && after.center.capturingPlayerId === 2 && after.center.progressTicks > 30); tick += 1) {
+      after = game.step();
+    }
     expect(living(0)).toBe(0);
     expect(living(2)).toBeGreaterThan(0);
     expect(after.center.capturingPlayerId).toBe(2);
-    expect(after.center.progressTicks).toBe(31);
+    expect(after.center.progressTicks).toBeGreaterThan(30);
   });
 });

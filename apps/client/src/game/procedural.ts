@@ -1,21 +1,39 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import terrainMapUrl from "../assets/terrain-map.png";
+import { createDetailedUnitGeometry } from "./units/detailedUnits";
+export { createDetailedUnitRigGeometry } from "./units/detailedUnits";
 
 export const MAP_HALF_SIZE = 72;
 export const LOCAL_PLAYER_ID = 0;
 export const MAX_RENDERED_UNITS = 768;
 
 export const FACTIONS = [
-  { id: "north", name: "Reino Azul", color: 0x2f8fd1, dark: 0x153c63, accent: 0x9adfff, x: 0, z: -50 },
-  { id: "east", name: "Pacto Esmeralda", color: 0x43a85f, dark: 0x214d2e, accent: 0xa7f2b5, x: 50, z: 0 },
-  { id: "south", name: "Dominio Áureo", color: 0xd69a2d, dark: 0x6e4619, accent: 0xffdf86, x: 0, z: 50 },
-  { id: "west", name: "Legión Carmesí", color: 0xc94a3d, dark: 0x65251f, accent: 0xffa097, x: -50, z: 0 },
+  { id: "north", name: "Reino Azul", color: 0x2f8fd1, dark: 0x153c63, accent: 0x9adfff, x: 0, z: -60 },
+  { id: "east", name: "Pacto Esmeralda", color: 0x43a85f, dark: 0x214d2e, accent: 0xa7f2b5, x: 60, z: 0 },
+  { id: "south", name: "Dominio Áureo", color: 0xd69a2d, dark: 0x6e4619, accent: 0xffdf86, x: 0, z: 60 },
+  { id: "west", name: "Legión Carmesí", color: 0xc94a3d, dark: 0x65251f, accent: 0xffa097, x: -60, z: 0 },
 ] as const;
 export const UNIT_ARCHETYPES = ["guard", "archer", "knight", "giant", "commander"] as const;
 export type UnitArchetype = (typeof UNIT_ARCHETYPES)[number];
 export const UNIT_POSES = ["idle", "walkA", "walkB", "attack", "hit", "death"] as const;
 export type UnitPose = (typeof UNIT_POSES)[number];
+
+/**
+ * Native authored dimensions. One world unit is one metre: callers should not
+ * apply an additional character scale multiplier.
+ */
+export const UNIT_METRICS: Readonly<Record<UnitArchetype, {
+  height: number;
+  radius: number;
+  eyeHeight: number;
+}>> = {
+  guard: { height: 1.7, radius: 0.45, eyeHeight: 1.48 },
+  archer: { height: 1.68, radius: 0.42, eyeHeight: 1.46 },
+  knight: { height: 2.25, radius: 0.6, eyeHeight: 2.02 },
+  giant: { height: 2.5, radius: 0.85, eyeHeight: 2.15 },
+  commander: { height: 1.85, radius: 0.52, eyeHeight: 1.58 },
+};
 
 export interface RoadSample {
   laneId: string;
@@ -246,17 +264,23 @@ export function buildLocalTowerPads(lanes: readonly LaneVisual[]): TowerPadVisua
   for (const lane of lanes) {
     let routeT: number | null = null;
     let direction: 1 | -1 = 1;
-    if (lane.fromPlayer === LOCAL_PLAYER_ID) routeT = 0.145;
+    if (lane.fromPlayer === LOCAL_PLAYER_ID) routeT = 0.12;
     if (lane.toPlayer === LOCAL_PLAYER_ID) {
-      routeT = 0.855;
+      routeT = 0.88;
       direction = -1;
     }
     if (routeT === null) continue;
     const point = lane.curve.getPointAt(routeT);
     const tangent = lane.curve.getTangentAt(routeT).normalize().multiplyScalar(direction);
-    const side = pads.length % 2 === 0 ? 1 : -1;
-    point.x += -tangent.z * 2.4 * side;
-    point.z += tangent.x * 2.4 * side;
+    const normal = new THREE.Vector3(tangent.z, 0, -tangent.x);
+    const offset = lane.width * 0.5;
+    const first = point.clone().addScaledVector(normal, offset);
+    const second = point.clone().addScaledVector(normal, -offset);
+    const firstRadius = Math.hypot(first.x, first.z);
+    const secondRadius = Math.hypot(second.x, second.z);
+    // Match content/map.ts: pads sit outside the road edge; radial ties use
+    // local player 0's first deterministic candidate.
+    point.copy(firstRadius >= secondRadius ? first : second);
     point.y = 0.17;
     pads.push({ laneId: lane.id, routeT, direction, point });
   }
@@ -736,34 +760,35 @@ export function createCastle(owner: number): CastleVisual {
 export function createCenterObjective(): CenterVisual {
   const group = new THREE.Group();
   group.name = "center-objective";
-  group.scale.set(1.25, 1.6, 1.25);
-  const stone = buildingMaterial(0xb5ae98);
-  stone.emissive.setHex(0x514d43);
-  stone.emissiveIntensity = 0.34;
-  const gold = buildingMaterial(0xb99755);
-  const ringMaterial = buildingMaterial(0x514b3b);
+  const stone = buildingMaterial(0x9c967e);
+  stone.emissive.setHex(0x35352d);
+  stone.emissiveIntensity = 0.16;
+  const ringMaterial = buildingMaterial(0x625b46);
   const crystalMaterial = createToonMaterial({
     color: 0xd34aff,
     emissive: 0x7b1896,
-    emissiveIntensity: 1.45,
+    emissiveIntensity: 0,
   });
-  addPart(group, new THREE.CylinderGeometry(3.25, 3.55, 0.5, 14), stone, 0, 0.25, 0);
-  addPart(group, new THREE.CylinderGeometry(2.72, 2.95, 0.3, 14), gold, 0, 0.64, 0);
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(2.82, 0.15, 5, 28), ringMaterial);
+  // The objective is a flat road medallion: it never obscures units.
+  const disk = addPart(group, new THREE.CylinderGeometry(2.8, 2.8, 0.08, 32), stone, 0, 0.045, 0);
+  disk.castShadow = false;
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(2.38, 0.095, 5, 32), ringMaterial);
   ring.rotation.x = Math.PI * 0.5;
-  ring.position.y = 0.86;
-  ring.castShadow = true;
+  ring.position.y = 0.105;
+  ring.castShadow = false;
   group.add(ring);
   const progressRing = new THREE.Mesh(
-    new THREE.RingGeometry(3.35, 3.62, 48, 1, Math.PI * 0.5, Math.PI * 2),
+    new THREE.RingGeometry(2.92, 3.18, 48, 1, Math.PI * 0.5, Math.PI * 2),
     new THREE.MeshBasicMaterial({ color: 0xf2d68c, transparent: true, opacity: 0.9, side: THREE.DoubleSide }),
   );
   progressRing.rotation.x = -Math.PI * 0.5;
-  progressRing.position.y = 0.14;
+  progressRing.position.y = 0.115;
   progressRing.visible = false;
   group.add(progressRing);
-  const crystal = addPart(group, new THREE.OctahedronGeometry(0.76, 0), crystalMaterial, 0, 2.58, 0);
-  addPart(group, new THREE.CylinderGeometry(0.82, 1.08, 1.32, 8), stone, 0, 1.48, 0);
+  // Compatibility handle for WorldRenderer; intentionally no visible geometry.
+  const crystal = new THREE.Mesh(new THREE.BufferGeometry(), crystalMaterial);
+  crystal.visible = false;
+  group.add(crystal);
   return { group, ringMaterial, crystalMaterial, crystal, progressRing };
 }
 function squaredDistanceToSamples(x: number, z: number, lanes: readonly LaneVisual[]): number {
@@ -966,220 +991,13 @@ function unitPart(
   return part;
 }
 
-function posedUnitPart(
-  poseGroup: number,
-  geometry: THREE.BufferGeometry,
-  color: THREE.ColorRepresentation,
-  x: number,
-  y: number,
-  z: number,
-  rotationX = 0,
-  rotationY = 0,
-  rotationZ = 0,
-  scaleX = 1,
-  scaleY = 1,
-  scaleZ = 1,
-): THREE.BufferGeometry {
-  return unitPart(
-    geometry,
-    color,
-    x,
-    y,
-    z,
-    rotationX,
-    rotationY,
-    rotationZ,
-    scaleX,
-    scaleY,
-    scaleZ,
-    poseGroup,
-  );
-}
-
-function rotatePoseVertexX(
-  y: number,
-  z: number,
-  pivotY: number,
-  pivotZ: number,
-  angle: number,
-): [number, number] {
-  const offsetY = y - pivotY;
-  const offsetZ = z - pivotZ;
-  const cosine = Math.cos(angle);
-  const sine = Math.sin(angle);
-  return [pivotY + offsetY * cosine - offsetZ * sine, pivotZ + offsetY * sine + offsetZ * cosine];
-}
-
-function applyUnitPose(geometry: THREE.BufferGeometry, pose: UnitPose, archetype: UnitArchetype): THREE.BufferGeometry {
-  const positions = geometry.getAttribute("position") as THREE.BufferAttribute;
-  const groups = geometry.getAttribute("poseGroup") as THREE.BufferAttribute;
-  if (pose === "idle") {
-    geometry.deleteAttribute("poseGroup");
-    geometry.computeBoundingSphere();
-    return geometry;
-  }
-
-  const walkDirection = pose === "walkA" ? 1 : pose === "walkB" ? -1 : 0;
-  for (let index = 0; index < positions.count; index += 1) {
-    let x = positions.getX(index);
-    let y = positions.getY(index);
-    let z = positions.getZ(index);
-    const group = Math.round(groups.getX(index));
-
-    if (walkDirection !== 0 && (group === 1 || group === 2)) {
-      const legDirection = group === 1 ? walkDirection : -walkDirection;
-      const swing = legDirection * (archetype === "knight" ? 0.28 : 0.38);
-      [y, z] = rotatePoseVertexX(y, z, archetype === "knight" ? 0.58 : 0.52, 0, swing);
-    }
-    if (walkDirection !== 0 && (group === 3 || group === 4)) {
-      const armDirection = group === 3 ? -walkDirection : walkDirection;
-      [y, z] = rotatePoseVertexX(y, z, archetype === "giant" ? 1.46 : 1.1, 0, armDirection * 0.22);
-    }
-
-    if (pose === "attack" && archetype === "archer" && group === 6) {
-      [y, z] = rotatePoseVertexX(y, z, 0.88, 0, -1.45);
-      z -= 0.18;
-    }
-    if (pose === "attack" && (group === 3 || group === 4)) {
-      if (archetype === "archer") {
-        const angle = group === 3 ? 0.72 : -0.48;
-        const offsetX = x;
-        const offsetZ = z;
-        x = offsetX * Math.cos(angle) + offsetZ * Math.sin(angle);
-        z = -offsetX * Math.sin(angle) + offsetZ * Math.cos(angle) - 0.12;
-      } else {
-        const pivotY = archetype === "giant" ? 1.48 : archetype === "knight" ? 1.25 : 0.78;
-        const swing = archetype === "giant" ? 0.95 : group === 3 ? -1.05 : -0.42;
-        [y, z] = rotatePoseVertexX(y, z, pivotY, 0, swing);
-      }
-    }
-
-    if (pose === "hit") {
-      const angle = 0.24;
-      const offsetY = y - 0.08;
-      const rotatedX = x * Math.cos(angle) - offsetY * Math.sin(angle);
-      const rotatedY = x * Math.sin(angle) + offsetY * Math.cos(angle);
-      x = rotatedX + 0.12;
-      y = rotatedY + 0.13;
-      z += group === 5 ? 0.12 : 0;
-    } else if (pose === "death") {
-      const angle = -1.18;
-      const offsetY = y - 0.06;
-      const rotatedX = x * Math.cos(angle) - offsetY * Math.sin(angle);
-      const rotatedY = x * Math.sin(angle) + offsetY * Math.cos(angle);
-      x = rotatedX;
-      y = Math.max(0.035, rotatedY + 0.16);
-      z *= 1.1;
-    }
-
-    positions.setXYZ(index, x, y, z);
-  }
-  positions.needsUpdate = true;
-  geometry.deleteAttribute("poseGroup");
-  geometry.computeVertexNormals();
-  geometry.computeBoundingSphere();
-  return geometry;
-}
 
 export function createUnitGeometry(
   kind: string = "guard",
   factionColor: number = 0x397fb8,
   pose: UnitPose = "idle",
 ): THREE.BufferGeometry {
-  const archetype = unitArchetype(kind);
-  const team = new THREE.Color(factionColor);
-  const teamLight = team.clone().offsetHSL(0, 0.08, 0.22).getHex();
-  const teamDark = team.clone().offsetHSL(0, 0.04, -0.22).getHex();
-  const teamDeep = team.clone().offsetHSL(0, 0.02, -0.33).getHex();
-  const skin = 0xe0ad78;
-  const skinLight = 0xf1ca91;
-  const skinDark = 0xa56c4a;
-  const metal = 0xc9ccbc;
-  const metalLight = 0xf0ead0;
-  const metalDark = 0x4b5350;
-  const leather = 0x744a2d;
-  const leatherDark = 0x453023;
-  const clothDark = 0x262a26;
-  const outline = 0x1e2520;
-  const hair = 0x3a2921;
-  const gold = 0xe0b64c;
-  const goldDark = 0x88632d;
-  const parts: THREE.BufferGeometry[] = [];
-
-  if (archetype === "guard") {
-    parts.push(
-      posedUnitPart(1, new THREE.BoxGeometry(0.14, 0.45, 0.18), clothDark, -0.14, 0.28, 0),
-      posedUnitPart(2, new THREE.BoxGeometry(0.14, 0.45, 0.18), clothDark, 0.14, 0.28, 0),
-      unitPart(new THREE.CylinderGeometry(0.27, 0.34, 0.65, 6), factionColor, 0, 0.76, 0),
-      posedUnitPart(5, new THREE.SphereGeometry(0.28, 7, 5), skin, 0, 1.25, 0),
-      posedUnitPart(5, new THREE.CylinderGeometry(0.29, 0.33, 0.23, 7), metal, 0, 1.44, 0),
-      posedUnitPart(5, new THREE.ConeGeometry(0.27, 0.3, 7), metalDark, 0, 1.68, 0),
-      posedUnitPart(3, new THREE.CylinderGeometry(0.07, 0.09, 0.42, 5), skin, -0.29, 0.86, 0, 0, 0, -0.28),
-      posedUnitPart(4, new THREE.CylinderGeometry(0.07, 0.09, 0.42, 5), skin, 0.29, 0.86, 0, 0, 0, 0.28),
-      posedUnitPart(4, new THREE.CylinderGeometry(0.29, 0.29, 0.08, 10), teamLight, 0.4, 0.87, -0.03, Math.PI * 0.5),
-      posedUnitPart(3, new THREE.BoxGeometry(0.075, 0.82, 0.06), metalLight, -0.42, 0.96, 0, 0, 0, -0.18),
-      posedUnitPart(3, new THREE.BoxGeometry(0.12, 0.22, 0.09), leather, -0.33, 0.59, 0, 0, 0, -0.18),
-    );
-  } else if (archetype === "archer") {
-    parts.push(
-      posedUnitPart(1, new THREE.BoxGeometry(0.13, 0.44, 0.16), leather, -0.13, 0.27, 0),
-      posedUnitPart(2, new THREE.BoxGeometry(0.13, 0.44, 0.16), leather, 0.13, 0.27, 0),
-      unitPart(new THREE.CylinderGeometry(0.25, 0.32, 0.63, 6), factionColor, 0, 0.73, 0),
-      posedUnitPart(5, new THREE.SphereGeometry(0.27, 7, 5), skin, 0, 1.21, -0.01),
-      posedUnitPart(5, new THREE.ConeGeometry(0.38, 0.56, 7), teamDark, 0, 1.43, 0.08),
-      posedUnitPart(3, new THREE.CylinderGeometry(0.065, 0.085, 0.4, 5), skin, 0.25, 0.88, -0.03, 0, 0, 0.48),
-      posedUnitPart(4, new THREE.CylinderGeometry(0.065, 0.085, 0.4, 5), skin, -0.25, 0.88, -0.03, 0, 0, -0.48),
-      posedUnitPart(3, new THREE.TorusGeometry(0.42, 0.04, 4, 14, Math.PI * 1.55), leatherDark, 0.4, 0.88, -0.04, 0, 0, -0.78),
-      posedUnitPart(6, new THREE.BoxGeometry(0.045, 0.88, 0.045), 0xd9bd7a, 0.39, 0.88, -0.04, 0, 0, -0.07),
-      unitPart(new THREE.BoxGeometry(0.26, 0.5, 0.12), leather, -0.22, 0.9, 0.2, 0, 0, -0.16),
-    );
-  } else if (archetype === "knight") {
-    parts.push(
-      unitPart(new THREE.BoxGeometry(0.72, 0.58, 1.12), teamDark, 0, 0.65, 0.04),
-      unitPart(new THREE.BoxGeometry(0.36, 0.42, 0.48), teamLight, 0, 0.82, -0.72, -0.18),
-      posedUnitPart(1, new THREE.BoxGeometry(0.13, 0.55, 0.15), leather, -0.25, 0.27, -0.3),
-      posedUnitPart(2, new THREE.BoxGeometry(0.13, 0.55, 0.15), leather, 0.25, 0.27, -0.3),
-      posedUnitPart(2, new THREE.BoxGeometry(0.13, 0.55, 0.15), leather, -0.25, 0.27, 0.36),
-      posedUnitPart(1, new THREE.BoxGeometry(0.13, 0.55, 0.15), leather, 0.25, 0.27, 0.36),
-      unitPart(new THREE.CylinderGeometry(0.24, 0.3, 0.55, 6), factionColor, 0, 1.2, 0.08),
-      posedUnitPart(5, new THREE.SphereGeometry(0.26, 7, 5), skinDark, 0, 1.6, 0.05),
-      posedUnitPart(5, new THREE.ConeGeometry(0.31, 0.4, 7), metal, 0, 1.84, 0.05),
-      posedUnitPart(4, new THREE.CylinderGeometry(0.3, 0.3, 0.08, 10), factionColor, 0.39, 1.24, -0.02, Math.PI * 0.5),
-      posedUnitPart(3, new THREE.CylinderGeometry(0.07, 0.09, 0.42, 5), metal, -0.28, 1.26, -0.04, 0, 0, -0.35),
-      posedUnitPart(3, new THREE.CylinderGeometry(0.04, 0.05, 1.85, 5), metalLight, -0.45, 1.28, -0.08, 0, 0, -0.35),
-    );
-  } else if (archetype === "giant") {
-    parts.push(
-      posedUnitPart(1, new THREE.BoxGeometry(0.3, 0.72, 0.34), leather, -0.28, 0.38, 0),
-      posedUnitPart(2, new THREE.BoxGeometry(0.3, 0.72, 0.34), leather, 0.28, 0.38, 0),
-      unitPart(new THREE.DodecahedronGeometry(0.72, 0), leather, 0, 1.12, 0, 0, 0, 0, 1.05, 1.18, 0.78),
-      posedUnitPart(3, new THREE.CylinderGeometry(0.22, 0.27, 0.94, 6), skin, -0.68, 1.08, 0, 0, 0, -0.24),
-      posedUnitPart(4, new THREE.CylinderGeometry(0.22, 0.27, 0.94, 6), skin, 0.68, 1.08, 0, 0, 0, 0.24),
-      posedUnitPart(5, new THREE.SphereGeometry(0.4, 7, 5), skinDark, 0, 1.86, -0.02),
-      unitPart(new THREE.BoxGeometry(1.18, 0.2, 0.18), factionColor, 0, 0.88, -0.54),
-      posedUnitPart(3, new THREE.CylinderGeometry(0.12, 0.17, 1.5, 6), leather, 0.78, 0.98, 0, 0, 0, 0.42),
-      posedUnitPart(3, new THREE.DodecahedronGeometry(0.32, 0), 0x66543c, 1.08, 1.5, 0),
-    );
-  } else {
-    parts.push(
-      posedUnitPart(1, new THREE.BoxGeometry(0.16, 0.5, 0.19), clothDark, -0.15, 0.3, 0),
-      posedUnitPart(2, new THREE.BoxGeometry(0.16, 0.5, 0.19), clothDark, 0.15, 0.3, 0),
-      unitPart(new THREE.CylinderGeometry(0.3, 0.38, 0.72, 7), factionColor, 0, 0.84, 0),
-      unitPart(new THREE.BoxGeometry(0.66, 0.78, 0.09), teamDark, 0, 0.88, 0.2),
-      posedUnitPart(5, new THREE.SphereGeometry(0.3, 8, 5), skin, 0, 1.39, -0.02),
-      posedUnitPart(5, new THREE.CylinderGeometry(0.29, 0.33, 0.26, 7), metalDark, 0, 1.57, -0.02),
-      posedUnitPart(5, new THREE.CylinderGeometry(0.33, 0.36, 0.18, 7), gold, 0, 1.75, -0.02),
-      posedUnitPart(5, new THREE.ConeGeometry(0.1, 0.26, 5), gold, -0.19, 1.98, -0.02),
-      posedUnitPart(5, new THREE.ConeGeometry(0.1, 0.3, 5), gold, 0, 2.03, -0.02),
-      posedUnitPart(5, new THREE.ConeGeometry(0.1, 0.26, 5), gold, 0.19, 1.98, -0.02),
-      posedUnitPart(3, new THREE.CylinderGeometry(0.075, 0.095, 0.46, 5), skin, -0.29, 0.93, 0, 0, 0, -0.3),
-      posedUnitPart(4, new THREE.CylinderGeometry(0.075, 0.095, 0.46, 5), skin, 0.29, 0.93, 0, 0, 0, 0.3),
-      posedUnitPart(3, new THREE.BoxGeometry(0.09, 0.96, 0.07), metalLight, -0.45, 1.05, 0, 0, 0, -0.22),
-      posedUnitPart(3, new THREE.BoxGeometry(0.16, 0.23, 0.1), gold, -0.35, 0.63, 0, 0, 0, -0.22),
-    );
-  }
-
-  return applyUnitPose(mergeParts(parts), pose, archetype);
+  return createDetailedUnitGeometry(kind, factionColor, pose);
 }
 
 export function createCannonTowerGeometry(factionColor: number = 0x397fb8): THREE.BufferGeometry {

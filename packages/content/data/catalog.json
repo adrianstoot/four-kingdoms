@@ -1,5 +1,5 @@
 {
-  "version": "vertical-slice-1",
+  "version": "metric-single-unit-2",
   "balance": {
     "tickRate": 20,
     "initialElixir": 5,
@@ -14,18 +14,18 @@
     "castleMaxHp": 10000
   },
   "units": [
-    { "id": "guard", "kind": "unit", "maxHp": 230, "damage": 34, "attackRange": 1.4, "aggroRange": 6, "attackCooldownTicks": 20, "radius": 0.55, "captureWeight": 1, "targetPriority": "closest", "moveSpeed": 3.1, "hero": false },
-    { "id": "archer", "kind": "unit", "maxHp": 125, "damage": 28, "attackRange": 6.8, "aggroRange": 8, "attackCooldownTicks": 24, "radius": 0.5, "captureWeight": 1, "targetPriority": "closest", "moveSpeed": 3, "hero": false },
-    { "id": "knight", "kind": "unit", "maxHp": 720, "damage": 65, "attackRange": 1.5, "aggroRange": 6, "attackCooldownTicks": 28, "radius": 0.7, "captureWeight": 1, "targetPriority": "closest", "moveSpeed": 2.45, "hero": false },
-    { "id": "giant", "kind": "unit", "maxHp": 1900, "damage": 135, "attackRange": 1.8, "aggroRange": 8, "attackCooldownTicks": 32, "radius": 1.1, "captureWeight": 2, "targetPriority": "buildings", "moveSpeed": 1.65, "hero": false },
-    { "id": "commander", "kind": "unit", "maxHp": 1100, "damage": 95, "attackRange": 2, "aggroRange": 7, "attackCooldownTicks": 22, "radius": 0.8, "captureWeight": 2, "targetPriority": "closest", "moveSpeed": 2.6, "hero": true }
+    { "id": "guard", "kind": "unit", "maxHp": 230, "damage": 34, "attackRange": 1.4, "aggroRange": 6, "attackCooldownTicks": 20, "attackAnticipationTicks": 7, "height": 1.7, "physicalRadius": 0.42, "radius": 0.42, "captureWeight": 1, "targetPriority": "closest", "moveSpeed": 3.1, "hero": false },
+    { "id": "archer", "kind": "unit", "maxHp": 125, "damage": 28, "attackRange": 6.8, "aggroRange": 8, "attackCooldownTicks": 24, "attackAnticipationTicks": 9, "height": 1.7, "physicalRadius": 0.4, "radius": 0.4, "captureWeight": 1, "targetPriority": "closest", "moveSpeed": 3, "hero": false },
+    { "id": "knight", "kind": "unit", "maxHp": 720, "damage": 65, "attackRange": 1.5, "aggroRange": 6, "attackCooldownTicks": 28, "attackAnticipationTicks": 10, "height": 2.2, "physicalRadius": 0.68, "radius": 0.68, "captureWeight": 1, "targetPriority": "closest", "moveSpeed": 2.45, "hero": false },
+    { "id": "giant", "kind": "unit", "maxHp": 1900, "damage": 135, "attackRange": 1.8, "aggroRange": 8, "attackCooldownTicks": 32, "attackAnticipationTicks": 12, "height": 2.5, "physicalRadius": 0.82, "radius": 0.82, "captureWeight": 2, "targetPriority": "buildings", "moveSpeed": 1.65, "hero": false },
+    { "id": "commander", "kind": "unit", "maxHp": 1100, "damage": 95, "attackRange": 2, "aggroRange": 7, "attackCooldownTicks": 22, "attackAnticipationTicks": 8, "height": 1.9, "physicalRadius": 0.5, "radius": 0.5, "captureWeight": 2, "targetPriority": "closest", "moveSpeed": 2.6, "hero": true }
   ],
   "buildings": [
-    { "id": "cannon_tower", "kind": "building", "maxHp": 1200, "damage": 75, "attackRange": 9, "aggroRange": 9, "attackCooldownTicks": 25, "radius": 1.15, "captureWeight": 0, "targetPriority": "closest", "lifetimeTicks": 2400 }
+    { "id": "cannon_tower", "kind": "building", "maxHp": 1200, "damage": 75, "attackRange": 9, "aggroRange": 9, "attackCooldownTicks": 25, "attackAnticipationTicks": 8, "height": 4.8, "physicalRadius": 1.15, "radius": 1.15, "captureWeight": 0, "targetPriority": "closest", "lifetimeTicks": 2400 }
   ],
   "cards": [
-    { "id": "guards", "kind": "troop", "cost": 3, "archetypeId": "guard", "count": 4, "cooldownTicks": 0 },
-    { "id": "archers", "kind": "troop", "cost": 3, "archetypeId": "archer", "count": 3, "cooldownTicks": 0 },
+    { "id": "guards", "kind": "troop", "cost": 3, "archetypeId": "guard", "count": 1, "cooldownTicks": 0 },
+    { "id": "archers", "kind": "troop", "cost": 3, "archetypeId": "archer", "count": 1, "cooldownTicks": 0 },
     { "id": "knight", "kind": "troop", "cost": 4, "archetypeId": "knight", "count": 1, "cooldownTicks": 0 },
     { "id": "giant", "kind": "troop", "cost": 7, "archetypeId": "giant", "count": 1, "cooldownTicks": 0 },
     { "id": "commander", "kind": "troop", "cost": 5, "archetypeId": "commander", "count": 1, "cooldownTicks": 600 },

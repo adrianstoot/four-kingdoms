@@ -38,6 +38,9 @@ const combatStatsSchema = z.object({
   attackRange: z.number().positive(),
   aggroRange: z.number().positive(),
   attackCooldownTicks: z.number().int().positive(),
+  attackAnticipationTicks: z.number().int().nonnegative(),
+  height: z.number().positive(),
+  physicalRadius: z.number().positive(),
   radius: z.number().positive(),
   captureWeight: z.number().nonnegative(),
   targetPriority: z.enum(['closest', 'buildings']),
@@ -61,7 +64,7 @@ const troopCardSchema = z.object({
   kind: z.literal('troop'),
   cost: z.number().int().min(0).max(10),
   archetypeId: archetypeIdSchema.exclude(['cannon_tower']),
-  count: z.number().int().positive(),
+  count: z.literal(1),
   cooldownTicks: z.number().int().nonnegative(),
 });
 
@@ -155,7 +158,7 @@ export const laneSchema = z.object({
   from: z.string().min(1),
   to: z.string().min(1),
   kind: z.enum(['outer', 'inner', 'radial']),
-  width: z.number().positive(),
+  width: z.literal(5),
   points: z.array(vec2Schema).min(2),
 });
 

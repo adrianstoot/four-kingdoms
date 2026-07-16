@@ -3,6 +3,7 @@ import {
   buildSmoothPath,
   getLane,
   getRoute,
+  getRoutesForPlayer,
   nearestOnSmoothPath,
   sampleSmoothPath,
   type SmoothPath,
@@ -92,16 +93,16 @@ export function findPlacement(
   graph: MapGraph = MAP_GRAPH,
 ): PlacementResult {
   if (playerId < 0 || playerId > 3) {
-    return { valid: false, position: desired, yaw: 0, pathDistance: 0, reason: 'invalid-player' };
+    return { valid: false, position: desired, yaw: 0, pathDistance: 0, routeDistance: 0, reason: 'invalid-player' };
   }
   const route = getRoute(routeId, graph);
-  if (!route) return { valid: false, position: desired, yaw: 0, pathDistance: 0, reason: 'invalid-route' };
+  if (!route) return { valid: false, position: desired, yaw: 0, pathDistance: 0, routeDistance: 0, routeId, reason: 'invalid-route' };
   if (route.playerId !== playerId) {
-    return { valid: false, position: desired, yaw: 0, pathDistance: 0, reason: 'wrong-owner' };
+    return { valid: false, position: desired, yaw: 0, pathDistance: 0, routeDistance: 0, routeId, reason: 'wrong-owner' };
   }
   const first = route.steps[0];
   const lane = first ? getLane(first.laneId, graph) : undefined;
-  if (!first || !lane) return { valid: false, position: desired, yaw: 0, pathDistance: 0, reason: 'invalid-route' };
+  if (!first || !lane) return { valid: false, position: desired, yaw: 0, pathDistance: 0, routeDistance: 0, routeId, reason: 'invalid-route' };
   const lanePath = smoothPathFor(lane.points);
 
   if (cardId === 'cannon_tower') {
@@ -118,6 +119,8 @@ export function findPlacement(
         position: closest?.position ?? desired,
         yaw: closest?.yaw ?? 0,
         pathDistance: 0,
+        routeDistance: 0,
+        routeId,
         laneId: lane.id,
         padId: closest?.id,
         reason: 'no-tower-pad',
@@ -125,11 +128,11 @@ export function findPlacement(
     }
     const nearest = nearestOnSmoothPath(lanePath, closest.position);
     const pathDistance = first.reverse ? lanePath.length - nearest.distance : nearest.distance;
-    return { valid: true, position: closest.position, yaw: closest.yaw, pathDistance, laneId: lane.id, padId: closest.id };
+    return { valid: true, position: closest.position, yaw: closest.yaw, pathDistance, routeDistance: pathDistance, routeId, laneId: lane.id, padId: closest.id };
   }
 
   const zone = graph.deploymentZones.find((candidate) => candidate.playerId === playerId && candidate.routeIds.includes(routeId));
-  if (!zone) return { valid: false, position: desired, yaw: 0, pathDistance: 0, reason: 'invalid-route' };
+  if (!zone) return { valid: false, position: desired, yaw: 0, pathDistance: 0, routeDistance: 0, routeId, reason: 'invalid-route' };
   const nearest = nearestOnSmoothPath(lanePath, desired);
   const minimum = Math.min(zone.startT, zone.endT);
   const maximum = Math.max(zone.startT, zone.endT);
@@ -143,8 +146,90 @@ export function findPlacement(
     position: snapped.position,
     yaw: first.reverse ? snapped.yaw + Math.PI : snapped.yaw,
     pathDistance: first.reverse ? lanePath.length - snapped.distance : snapped.distance,
+    routeDistance: first.reverse ? lanePath.length - snapped.distance : snapped.distance,
+    routeId,
     laneId: lane.id,
     reason: withinT ? (closeEnough ? undefined : 'too-far-from-lane') : 'outside-deployment-zone',
+  };
+}
+
+export interface BestPlacementOptions {
+  /** Keeps the current lane selected until another lane is meaningfully closer. */
+  preferredRouteId?: string;
+  hysteresisMeters?: number;
+  graph?: MapGraph;
+}
+
+/**
+ * Finds the most natural click placement without requiring the caller to pick a
+ * route first. Troops inspect the player's five deployment zones; towers inspect
+ * the five lateral pads. The optional preferred route prevents cursor flicker at
+ * castle junctions where several centerlines overlap.
+ */
+export function findBestPlacement(
+  playerId: PlayerId,
+  cardId: CardId,
+  desired: Vec2,
+  options: BestPlacementOptions = {},
+): PlacementResult {
+  const graph = options.graph ?? MAP_GRAPH;
+  const hysteresis = Math.max(0, options.hysteresisMeters ?? 0.75);
+  if (playerId < 0 || playerId > 3) {
+    return { valid: false, position: desired, yaw: 0, pathDistance: 0, routeDistance: 0, reason: 'invalid-player' };
+  }
+
+  if (cardId === 'fireball' || cardId === 'chain_lightning') {
+    const spell = findSpellPlacement(desired, graph);
+    const candidates = buildRoutePaths(graph).map((path) => ({
+      path,
+      nearest: nearestOnRoutePath(path, desired),
+    })).sort((left, right) => (
+      left.nearest.lateralDistance - right.nearest.lateralDistance
+      || left.path.routeId.localeCompare(right.path.routeId)
+    ));
+    let selected = candidates[0];
+    const preferred = candidates.find((candidate) => candidate.path.routeId === options.preferredRouteId);
+    if (selected && preferred && preferred.nearest.lateralDistance <= selected.nearest.lateralDistance + hysteresis) {
+      selected = preferred;
+    }
+    if (!selected) {
+      return { valid: false, position: desired, yaw: 0, pathDistance: 0, routeDistance: 0, reason: 'no-placement-zone' };
+    }
+    return {
+      valid: spell.valid,
+      position: spell.position,
+      yaw: selected.nearest.yaw,
+      pathDistance: selected.nearest.routeDistance,
+      routeDistance: selected.nearest.routeDistance,
+      routeId: selected.path.routeId,
+      laneId: selected.nearest.laneId,
+      reason: spell.valid ? undefined : 'too-far-from-lane',
+    };
+  }
+
+  const candidates = getRoutesForPlayer(playerId, graph).map((route) => {
+    const placement = findPlacement(playerId, cardId, route.id, desired, graph);
+    return {
+      placement,
+      distance: Math.hypot(desired.x - placement.position.x, desired.z - placement.position.z),
+    };
+  });
+  const valid = candidates.filter((candidate) => candidate.placement.valid);
+  const pool = valid.length > 0 ? valid : candidates;
+  pool.sort((left, right) => (
+    left.distance - right.distance
+    || (left.placement.routeId ?? '').localeCompare(right.placement.routeId ?? '')
+  ));
+  let selected = pool[0];
+  const preferred = pool.find((candidate) => candidate.placement.routeId === options.preferredRouteId);
+  if (selected && preferred && preferred.distance <= selected.distance + hysteresis) selected = preferred;
+  return selected?.placement ?? {
+    valid: false,
+    position: desired,
+    yaw: 0,
+    pathDistance: 0,
+    routeDistance: 0,
+    reason: 'no-placement-zone',
   };
 }
 

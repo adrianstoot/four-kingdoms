@@ -5,33 +5,61 @@ import { CardHand, type CardDisplay } from './components/CardHand';
 import { GameMinimap } from './components/GameMinimap';
 import { SettingsPanel, type QualityLevel } from './components/SettingsPanel';
 import { playSound, setAudioEnabled, setAudioVolume } from './audio';
-import type { PlacementPreview, WorldRendererMetrics } from './game/types';
+import type { CameraPose, PlacementPreview, RendererResourceProgress, WorldRendererMetrics } from './game/types';
 import { toUiSnapshot } from './game/uiSnapshot';
+import titleBackground from './assets/title-background.webp';
+import loadingBackground from './assets/loading-background.webp';
+import titleBackground1920 from './assets/title-background-1920.webp';
+import loadingBackground1920 from './assets/loading-background-1920.webp';
 
 const factions = [
-  { name: 'REINO AZUL', color: '#3488c9', heart: '#3f8fc8' },
-  { name: 'DOMINIO CARMESÍ', color: '#d94e41', heart: '#dd5147' },
-  { name: 'PACTO ESMERALDA', color: '#43a962', heart: '#45af69' },
-  { name: 'CORTE VIOLETA', color: '#a146c3', heart: '#a94cc8' },
+  { name: 'REINO AZUL', color: '#3488c9' },
+  { name: 'DOMINIO CARMESÍ', color: '#d94e41' },
+  { name: 'PACTO ESMERALDA', color: '#43a962' },
+  { name: 'CORTE VIOLETA', color: '#a146c3' },
 ] as const;
 
 const cards: readonly CardDisplay[] = [
-  { id: 'guards', name: 'GUARDIANES', cost: 3, icon: '', atlasIndex: 0, accent: '#477fbd', description: 'Cuatro soldados cuerpo a cuerpo.' },
-  { id: 'archers', name: 'ARQUEROS', cost: 3, icon: '', atlasIndex: 1, accent: '#6ea668', description: 'Tres atacantes a distancia.' },
-  { id: 'knight', name: 'CABALLERO', cost: 4, icon: '', atlasIndex: 2, accent: '#6d82a9', description: 'Combatiente resistente de primera línea.' },
-  { id: 'giant', name: 'GIGANTE', cost: 7, icon: '', atlasIndex: 3, accent: '#b8804e', description: 'Unidad de asedio que prioriza edificios.' },
-  { id: 'cannon_tower', name: 'TORRE', cost: 4, icon: '', atlasIndex: 4, accent: '#8a8068', description: 'Defensa fija para los pads de carril.' },
-  { id: 'commander', name: 'COMANDANTE', cost: 5, icon: '', atlasIndex: 5, accent: '#b65243', description: 'Héroe único con aura de mando.' },
-  { id: 'fireball', name: 'BOLA DE FUEGO', cost: 4, icon: '', atlasIndex: 6, accent: '#d66135', description: 'Daño explosivo en un área.' },
-  { id: 'chain_lightning', name: 'RELÁMPAGO', cost: 5, icon: '', atlasIndex: 7, accent: '#6b9fe5', description: 'Salta entre cuatro objetivos hostiles.' },
+  { id: 'guards', name: 'GUARDIÁN', cost: 3, icon: '', atlasIndex: 0, accent: '#477fbd', description: 'Un guardián cuerpo a cuerpo de 1,70 m.' },
+  { id: 'archers', name: 'ARQUERO', cost: 3, icon: '', atlasIndex: 1, accent: '#6ea668', description: 'Un arquero de 1,70 m con ataque a distancia.' },
+  { id: 'knight', name: 'CABALLERO', cost: 4, icon: '', atlasIndex: 2, accent: '#6d82a9', description: 'Un caballero montado de primera línea.' },
+  { id: 'giant', name: 'GIGANTE', cost: 7, icon: '', atlasIndex: 3, accent: '#b8804e', description: 'Un gigante de 2,50 m que prioriza edificios.' },
+  { id: 'cannon_tower', name: 'TORRE', cost: 4, icon: '', atlasIndex: 4, accent: '#8a8068', description: 'Defensa fija para los pads laterales del carril.' },
+  { id: 'commander', name: 'COMANDANTE', cost: 5, icon: '', atlasIndex: 5, accent: '#b65243', description: 'Un comandante con aura de mando.' },
+  { id: 'fireball', name: 'BOLA DE FUEGO', cost: 4, icon: '', atlasIndex: 6, accent: '#d66135', description: 'Proyectil explosivo lanzado desde tu castillo.' },
+  { id: 'chain_lightning', name: 'RELÁMPAGO', cost: 5, icon: '', atlasIndex: 7, accent: '#6b9fe5', description: 'Rayo que encadena hasta cuatro objetivos.' },
 ];
 
 const spellCards = new Set(['fireball', 'chain_lightning']);
-type ScreenMode = 'title' | 'playing' | 'finished';
+const INITIAL_CAMERA_POSE: CameraPose = {
+  yaw: Math.PI * 1.25,
+  pitch: Math.PI * 0.25,
+  distance: 112,
+  target: { x: 0, y: 0, z: 0 },
+};
+
+type ScreenMode = 'title' | 'loading' | 'playing' | 'finished' | 'error';
+
+type WorkerMessage =
+  | { type: 'snapshot'; snapshot: GameSnapshot; sessionId?: number; firstSnapshot?: boolean }
+  | { type: 'commandRejected'; reason?: string; sessionId?: number }
+  | { type: 'error'; reason?: string; sessionId?: number }
+  | { type?: string; snapshot?: GameSnapshot; reason?: string; sessionId?: number };
 
 function formatTime(seconds: number): string {
   const safe = Math.max(0, Math.floor(seconds));
   return `${String(Math.floor(safe / 60)).padStart(2, '0')}:${String(safe % 60).padStart(2, '0')}`;
+}
+
+function rejectionMessage(reason?: string): string {
+  switch (reason) {
+    case 'insufficient-elixir': return 'No tienes suficiente elixir';
+    case 'card-on-cooldown': return 'La unidad todavía se está preparando';
+    case 'outside-deployment-zone': return 'Despliega dentro de tu zona del carril';
+    case 'too-far-from-lane': return 'Acerca el cursor al centro del camino';
+    case 'no-tower-pad': return 'La torre solo puede colocarse en un pad lateral';
+    default: return reason ? `Despliegue rechazado: ${reason}` : 'No se pudo completar el despliegue';
+  }
 }
 
 function Icon({ children, className = '' }: { children: ReactNode; className?: string }) {
@@ -54,10 +82,17 @@ export function App() {
   const workerRef = useRef<Worker | null>(null);
   const canvasRef = useRef<GameCanvasHandle>(null);
   const sequenceRef = useRef(1);
+  const sessionCounterRef = useRef(0);
+  const expectedSessionRef = useRef(0);
+  const modeRef = useRef<ScreenMode>('title');
   const previousCenterRef = useRef(-1);
   const finishedRef = useRef(false);
+  const noticeTimerRef = useRef<number | null>(null);
+  const rotateTimerRef = useRef<number | null>(null);
+
   const [mode, setMode] = useState<ScreenMode>('title');
   const [snapshot, setSnapshot] = useState<GameSnapshot | null>(null);
+  const [snapshotSessionId, setSnapshotSessionId] = useState(0);
   const [selectedCard, setSelectedCard] = useState<string | null>(null);
   const [placement, setPlacement] = useState<PlacementPreview | null>(null);
   const [paused, setPaused] = useState(false);
@@ -66,70 +101,236 @@ export function App() {
   const [audioEnabled, setAudio] = useState(true);
   const [volume, setVolume] = useState(0.72);
   const [showPerf, setShowPerf] = useState(false);
-  const [cameraQuarter, setCameraQuarter] = useState(0);
   const [backend, setBackend] = useState<'loading' | 'webgpu' | 'webgl2'>('loading');
   const [metrics, setMetrics] = useState<WorldRendererMetrics | null>(null);
+  const [cameraPose, setCameraPose] = useState<CameraPose>(INITIAL_CAMERA_POSE);
   const [notice, setNotice] = useState<string | null>(null);
+  const [rendererGeneration, setRendererGeneration] = useState(0);
+  const [rendererReady, setRendererReady] = useState(false);
+  const [resourcesReady, setResourcesReady] = useState(false);
+  const [resourceProgress, setResourceProgress] = useState(0);
+  const [resourceLabel, setResourceLabel] = useState('Preparando escenario');
+  const [firstSnapshot, setFirstSnapshot] = useState(false);
+  const [firstFrame, setFirstFrame] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const ui = useMemo(() => toUiSnapshot(snapshot), [snapshot]);
   const player = ui.players[0]!;
+  const titleStyle = useMemo(() => ({ '--screen-image': `image-set(url("${titleBackground1920}") 1x, url("${titleBackground}") 2x)` }) as CSSProperties, []);
+  const loadingStyle = useMemo(() => ({ '--screen-image': `image-set(url("${loadingBackground1920}") 1x, url("${loadingBackground}") 2x)` }) as CSSProperties, []);
+
+  const showNotice = useCallback((message: string, duration = 1700) => {
+    if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
+    setNotice(message);
+    noticeTimerRef.current = window.setTimeout(() => {
+      setNotice(null);
+      noticeTimerRef.current = null;
+    }, duration);
+  }, []);
+
+  const cancelSelection = useCallback(() => {
+    setSelectedCard(null);
+    setPlacement(null);
+  }, []);
+
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
 
   useEffect(() => {
     const worker = new Worker(new URL('./sim.worker.ts', import.meta.url), { type: 'module' });
     workerRef.current = worker;
-    worker.onmessage = (event: MessageEvent) => {
-      const message = event.data as { type?: string; snapshot?: GameSnapshot; reason?: string };
+
+    worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
+      const message = event.data;
       if (message.type === 'snapshot' && message.snapshot) {
+        const expectedSession = expectedSessionRef.current;
+        const belongsToActiveSession = expectedSession > 0
+          && (message.sessionId === expectedSession || message.sessionId === undefined);
+
+        if (message.sessionId !== undefined && expectedSession > 0 && message.sessionId !== expectedSession) return;
+
+        if (belongsToActiveSession) {
+          setSnapshot(message.snapshot);
+          setSnapshotSessionId(expectedSession);
+          setFirstSnapshot(true);
+        } else if (modeRef.current === 'title') {
+          // Warm the renderer with the worker's idle snapshot without counting
+          // it as the first frame of a match.
+          setSnapshot(message.snapshot);
+          setSnapshotSessionId(0);
+        } else {
+          return;
+        }
+
         const nextUi = toUiSnapshot(message.snapshot);
         if (previousCenterRef.current !== nextUi.centerOwner && nextUi.centerOwner >= 0) playSound('capture');
         previousCenterRef.current = nextUi.centerOwner;
-        setSnapshot(message.snapshot);
-        if ((nextUi.winner !== null || nextUi.draw || nextUi.phase === 'finished') && !finishedRef.current) {
+
+        if (
+          belongsToActiveSession
+          && modeRef.current === 'playing'
+          && (nextUi.winner !== null || nextUi.draw || nextUi.phase === 'finished')
+          && !finishedRef.current
+        ) {
           finishedRef.current = true;
+          modeRef.current = 'finished';
           setMode('finished');
+          cancelSelection();
           playSound('victory');
         }
       } else if (message.type === 'commandRejected') {
-        setNotice(message.reason ?? 'Despliegue rechazado');
-        window.setTimeout(() => setNotice(null), 1400);
+        showNotice(rejectionMessage(message.reason));
+        playSound('click');
+      } else if (message.type === 'error') {
+        setLoadError(message.reason ?? 'La simulación no pudo iniciar la partida.');
+        modeRef.current = 'error';
+        setMode('error');
       }
     };
+
+    worker.onerror = () => {
+      setLoadError('El proceso de simulación dejó de responder.');
+      modeRef.current = 'error';
+      setMode('error');
+    };
+
     return () => {
       worker.terminate();
       workerRef.current = null;
     };
+  }, [cancelSelection, showNotice]);
+
+  useEffect(() => () => {
+    if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
+    if (rotateTimerRef.current !== null) window.clearInterval(rotateTimerRef.current);
   }, []);
 
-  const startMatch = useCallback(() => {
+  const startMatch = useCallback((restartRenderer = false) => {
+    const worker = workerRef.current;
+    if (!worker) {
+      setLoadError('La simulación todavía no está disponible.');
+      modeRef.current = 'error';
+      setMode('error');
+      return;
+    }
+
+    const sessionId = ++sessionCounterRef.current;
+    expectedSessionRef.current = sessionId;
     finishedRef.current = false;
     previousCenterRef.current = -1;
-    setSelectedCard(null);
-    setPaused(false);
-    setMode('playing');
     sequenceRef.current = 1;
+    modeRef.current = 'loading';
+
+    setLoadError(null);
+    setSelectedCard(null);
+    setPlacement(null);
+    setPaused(false);
+    setSettingsOpen(false);
+    setSnapshot(null);
+    setSnapshotSessionId(0);
+    setFirstSnapshot(false);
+    setFirstFrame(false);
+    setMode('loading');
+
+    if (restartRenderer) {
+      setRendererGeneration((generation) => generation + 1);
+      setRendererReady(false);
+      setResourcesReady(false);
+      setResourceProgress(0);
+      setResourceLabel('Preparando escenario');
+      setBackend('loading');
+    }
+
     const seed = Math.floor(Date.now() % 0x7fffffff);
-    workerRef.current?.postMessage({ type: 'start', seed, maxEntities: 768 });
-    playSound('deploy');
+    worker.postMessage({ type: 'start', sessionId, seed, maxEntities: 768 });
+    playSound('click');
   }, []);
 
   useEffect(() => {
-    if (!new URLSearchParams(window.location.search).has('play')) return;
-    const timer = window.setTimeout(startMatch, 120);
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('autoplay') !== '1') return;
+    const timer = window.setTimeout(() => startMatch(), 120);
     return () => window.clearTimeout(timer);
   }, [startMatch]);
 
+  useEffect(() => {
+    if (mode !== 'loading') return;
+    if (rendererReady && resourcesReady && firstSnapshot && firstFrame) {
+      modeRef.current = 'playing';
+      setMode('playing');
+      playSound('deploy');
+    }
+  }, [firstFrame, firstSnapshot, mode, rendererReady, resourcesReady]);
+
+  useEffect(() => {
+    if (mode !== 'loading') return;
+    const timeout = window.setTimeout(() => {
+      setLoadError('La carga superó el tiempo esperado. Comprueba la aceleración 3D y vuelve a intentarlo.');
+      modeRef.current = 'error';
+      setMode('error');
+    }, 18000);
+    return () => window.clearTimeout(timeout);
+  }, [mode, rendererReady, resourcesReady, firstSnapshot, firstFrame]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== 'Escape') return;
+      if (selectedCard) {
+        event.preventDefault();
+        cancelSelection();
+        playSound('click');
+      } else if (settingsOpen) {
+        setSettingsOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [cancelSelection, selectedCard, settingsOpen]);
+
+  useEffect(() => {
+    if (selectedCard) canvasRef.current?.recalculatePlacement();
+  }, [cameraPose, selectedCard]);
+
   const selectCard = useCallback((cardId: string) => {
-    setSelectedCard((current) => current === cardId ? null : cardId);
+    setSelectedCard(cardId);
+    setPlacement(null);
+    const card = cards.find((candidate) => candidate.id === cardId);
+    const cooldown = player.cooldowns[cardId] ?? 0;
+    if (card && player.elixir + 0.001 < card.cost) {
+      showNotice(`Necesitas ${Math.ceil(card.cost - player.elixir)} más de elixir; la selección seguirá activa.`, 2200);
+    } else if (cooldown > 0) {
+      showNotice('La selección seguirá activa hasta que termine la preparación.', 2200);
+    }
     playSound('click');
-  }, []);
+  }, [player.cooldowns, player.elixir, showNotice]);
 
   const handlePlacement = useCallback((preview: PlacementPreview) => {
     if (!selectedCard || mode !== 'playing' || paused) return;
     if (!preview.valid) {
-      setNotice('Elige un tramo válido del carril');
+      const message = preview.reason === 'invalid-pad'
+        ? 'La torre solo puede colocarse en un pad lateral'
+        : preview.reason === 'enemy-zone'
+          ? 'Selecciona uno de tus cinco tramos de despliegue'
+          : 'Acerca el cursor al centro del camino';
+      showNotice(message);
       playSound('click');
       return;
     }
+
+    const card = cards.find((candidate) => candidate.id === selectedCard);
+    if (!card) return;
+    if (player.elixir + 0.001 < card.cost) {
+      showNotice(`Necesitas ${Math.ceil(card.cost - player.elixir)} más de elixir; la unidad sigue seleccionada.`, 2100);
+      playSound('click');
+      return;
+    }
+    if ((player.cooldowns[selectedCard] ?? 0) > 0) {
+      showNotice('Esta unidad aún se está preparando; la selección sigue activa.', 1900);
+      playSound('click');
+      return;
+    }
+
     const isSpell = spellCards.has(selectedCard);
     const command = {
       type: isSpell ? 'spell' : 'deploy',
@@ -140,15 +341,21 @@ export function App() {
       position: { x: preview.x, z: preview.z },
       routeId: isSpell ? undefined : preview.routeId,
     } as GameCommand;
-    workerRef.current?.postMessage({ type: 'command', command });
+
+    workerRef.current?.postMessage({
+      type: 'command',
+      sessionId: expectedSessionRef.current,
+      command,
+    });
+    setNotice(null);
     playSound(isSpell ? 'spell' : 'deploy');
-    setSelectedCard(null);
-  }, [mode, paused, selectedCard, ui.tick]);
+    // Selection is intentionally persistent for rapid repeated deployment.
+  }, [mode, paused, player.cooldowns, player.elixir, selectedCard, showNotice, ui.tick]);
 
   const togglePause = useCallback(() => {
     setPaused((current) => {
       const next = !current;
-      workerRef.current?.postMessage({ type: 'pause', paused: next });
+      workerRef.current?.postMessage({ type: 'pause', sessionId: expectedSessionRef.current, paused: next });
       return next;
     });
     playSound('click');
@@ -156,8 +363,40 @@ export function App() {
 
   const rotate = useCallback((direction: -1 | 1) => {
     canvasRef.current?.rotate(direction);
-    setCameraQuarter((quarter) => (quarter + direction + 4) % 4);
+  }, []);
+
+  const stopRotate = useCallback(() => {
+    if (rotateTimerRef.current !== null) {
+      window.clearInterval(rotateTimerRef.current);
+      rotateTimerRef.current = null;
+    }
+  }, []);
+
+  const startRotate = useCallback((direction: -1 | 1) => {
+    stopRotate();
+    rotate(direction);
+    rotateTimerRef.current = window.setInterval(() => rotate(direction), 90);
     playSound('click');
+  }, [rotate, stopRotate]);
+
+  const handleRendererReady = useCallback((nextBackend: 'webgpu' | 'webgl2') => {
+    setBackend(nextBackend);
+    setRendererReady(true);
+  }, []);
+
+  const handleResourceProgress = useCallback((progress: RendererResourceProgress) => {
+    setResourceProgress(Math.max(0, Math.min(1, progress.progress)));
+    if (progress.label) setResourceLabel(progress.label);
+  }, []);
+
+  const handleFirstFrame = useCallback((sessionId: number) => {
+    if (sessionId === expectedSessionRef.current) setFirstFrame(true);
+  }, []);
+
+  const handleRendererError = useCallback((error: Error) => {
+    setLoadError(`No se pudo iniciar el renderizador 3D: ${error.message}`);
+    modeRef.current = 'error';
+    setMode('error');
   }, []);
 
   const handleAudio = useCallback((enabled: boolean) => {
@@ -181,25 +420,48 @@ export function App() {
       ? 'Tú y la IA Esmeralda habéis derrotado a los dos reinos rivales.'
       : 'Las IA Carmesí y Violeta han destruido los castillos de tu equipo.';
   const nextElixir = player.elixir >= player.maxElixir ? 0 : Math.max(0, 2.5 - (ui.seconds % 2.5));
-  // Keep the reference's ten large gems while each gem now represents ten
-  // elixir. Rendering one hundred DOM cells makes the meter unreadable.
   const elixirSegments = 10;
   const filledElixir = player.elixir <= 0 ? 0 : Math.ceil((player.elixir / Math.max(1, player.maxElixir)) * elixirSegments);
+  const loadingProgress = Math.min(
+    rendererReady && resourcesReady && firstSnapshot && firstFrame ? 1 : 0.99,
+    (rendererReady ? 0.2 : 0) + resourceProgress * 0.4 + (firstSnapshot ? 0.2 : 0) + (firstFrame ? 0.2 : 0),
+  );
+  const loadingLabel = !rendererReady
+    ? 'INICIANDO MOTOR 3D'
+    : !resourcesReady
+      ? resourceLabel.toUpperCase()
+      : !firstSnapshot
+        ? 'SINCRONIZANDO LA PARTIDA'
+        : !firstFrame
+          ? 'COMPONIENDO EL CAMPO DE BATALLA'
+          : 'LOS REINOS ESTÁN LISTOS';
 
   return (
-    <main className="game-shell">
+    <main className={`game-shell mode-${mode}`}>
       <GameCanvas
+        key={rendererGeneration}
         ref={canvasRef}
         snapshot={snapshot}
+        snapshotSessionId={snapshotSessionId}
         selectedCard={selectedCard}
         quality={quality}
+        interactive={mode === 'playing' && !paused}
         onPlacement={handlePlacement}
         onHover={setPlacement}
         onMetrics={setMetrics}
-        onReady={setBackend}
+        onRendererReady={handleRendererReady}
+        onResourcesReady={() => {
+          setResourceProgress(1);
+          setResourcesReady(true);
+        }}
+        onResourceProgress={handleResourceProgress}
+        onFirstFrame={handleFirstFrame}
+        onCameraPoseChange={setCameraPose}
+        onCancelSelection={cancelSelection}
+        onError={handleRendererError}
       />
 
-      {mode !== 'title' && (
+      {(mode === 'playing' || mode === 'finished') && (
         <div className="hud">
           <div className="objective-stack">
             <section className="objective-panel" style={{ '--objective-color': centerFaction?.color ?? '#c7a361' } as CSSProperties}>
@@ -228,11 +490,31 @@ export function App() {
           </div>
 
           <div className="camera-cluster">
-            <button className="camera-button" type="button" onClick={() => rotate(-1)} title="Girar izquierda (Q)" aria-label="Girar izquierda">↶</button>
-            <button className="camera-button" type="button" onClick={() => rotate(1)} title="Girar derecha (E)" aria-label="Girar derecha">↷</button>
+            <button
+              className="camera-button"
+              type="button"
+              onPointerDown={() => startRotate(-1)}
+              onPointerUp={stopRotate}
+              onPointerCancel={stopRotate}
+              onPointerLeave={stopRotate}
+              onClick={(event) => { if (event.detail === 0) rotate(-1); }}
+              title="Mantén pulsado para girar a la izquierda (Q)"
+              aria-label="Girar cámara a la izquierda"
+            >↶</button>
+            <button
+              className="camera-button"
+              type="button"
+              onPointerDown={() => startRotate(1)}
+              onPointerUp={stopRotate}
+              onPointerCancel={stopRotate}
+              onPointerLeave={stopRotate}
+              onClick={(event) => { if (event.detail === 0) rotate(1); }}
+              title="Mantén pulsado para girar a la derecha (E)"
+              aria-label="Girar cámara a la derecha"
+            >↷</button>
           </div>
 
-          <GameMinimap snapshot={snapshot} cameraQuarter={cameraQuarter} />
+          <GameMinimap snapshot={snapshot} cameraPose={cameraPose} />
           <CardHand cards={cards} selectedId={selectedCard} elixir={player.elixir} cooldowns={player.cooldowns} onSelect={selectCard} />
 
           <section className="elixir-panel" aria-label="Elixir disponible">
@@ -247,8 +529,16 @@ export function App() {
             <div className="elixir-next">SIGUIENTE: {formatTime(nextElixir)}</div>
           </section>
 
-          {selectedCard && <div className="placement-tip">{placement?.valid ? 'CLIC PARA DESPLEGAR' : spellCards.has(selectedCard) ? 'APUNTA A CUALQUIER CARRIL' : 'COLOCA LA CARTA EN TU ZONA'} · ESC PARA CANCELAR</div>}
-          {notice && <div className="placement-tip">{notice.toUpperCase()}</div>}
+          {selectedCard && !notice && (
+            <div className={`placement-tip${placement?.valid ? ' valid' : ''}`}>
+              {placement?.valid
+                ? 'CLIC PARA DESPLEGAR DE NUEVO'
+                : spellCards.has(selectedCard)
+                  ? 'APUNTA AL CENTRO DE CUALQUIER CARRIL'
+                  : 'ELIGE UNO DE TUS TRAMOS DE CAMINO'} · ESC O CLIC DERECHO PARA CANCELAR
+            </div>
+          )}
+          {notice && <div className="placement-tip notice-tip" role="status">{notice.toUpperCase()}</div>}
 
           {showPerf && metrics && (
             <div className="perf-panel">
@@ -277,14 +567,68 @@ export function App() {
       {paused && mode === 'playing' && <div className="paused-banner">PAUSA</div>}
 
       {mode === 'title' && (
-        <section className="title-screen">
-          <div className="title-card">
-            <p className="eyebrow">BATALLA LOCAL · 2 CONTRA 2 · IA MEDIA</p>
+        <section className="cinematic-screen title-screen" style={titleStyle}>
+          <div className="cinematic-shade" />
+          <div className="title-hero">
+            <p className="eyebrow">BATALLA ESTRATÉGICA · 2 CONTRA 2</p>
             <div className="crest-mark"><span>IV</span></div>
             <h1 className="game-title">CUATRO<br />REINOS</h1>
-            <p className="game-subtitle">Dirige el Reino Azul junto al Pacto Esmeralda. Despliega tus ocho cartas, conquista el círculo central y destruye los castillos Carmesí y Violeta.</p>
-            <button type="button" className="primary-button" onClick={startMatch}>COMENZAR BATALLA</button>
-            <div className="feature-row"><span>UN JUGADOR</span><span>3 IA MEDIAS</span><span>SIN MULTIJUGADOR</span></div>
+            <p className="game-subtitle">Conquista los carriles, domina el círculo central y conduce al Reino Azul hacia la victoria.</p>
+            <button type="button" className="primary-button play-button" onClick={() => startMatch()}>JUGAR</button>
+            <div className="title-controls"><span>WASD MOVER</span><span>RUEDA ZOOM</span><span>BOTÓN DERECHO ROTAR</span></div>
+          </div>
+        </section>
+      )}
+
+      {mode === 'loading' && (
+        <section className="cinematic-screen loading-screen" style={loadingStyle} aria-live="polite">
+          <div className="cinematic-shade" />
+          <div className="loading-panel">
+            <div className="loading-sigil" aria-hidden="true"><i /><i /><i /><span>IV</span></div>
+            <p className="eyebrow">PREPARANDO LOS REINOS…</p>
+            <h2>{loadingLabel}</h2>
+            <div className="loading-track" role="progressbar" aria-label="Carga de la partida" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(loadingProgress * 100)}>
+              <div style={{ width: `${loadingProgress * 100}%` }} />
+            </div>
+            <div className="loading-checkpoints" aria-hidden="true">
+              <span className={rendererReady ? 'ready' : ''}>MOTOR 3D</span>
+              <span className={resourceProgress >= 0.5 ? 'ready' : ''}>TEXTURAS</span>
+              <span className={resourcesReady ? 'ready' : ''}>RIGS</span>
+              <span className={firstSnapshot ? 'ready' : ''}>PARTIDA</span>
+              <span className={firstFrame ? 'ready' : ''}>PRIMER FRAME</span>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {mode === 'error' && (
+        <section className="cinematic-screen error-screen" style={loadingStyle}>
+          <div className="cinematic-shade" />
+          <div className="result-card error-card" role="alert">
+            <p className="eyebrow">NO SE PUDO PREPARAR LA BATALLA</p>
+            <h2 className="game-title result-title">LOS REINOS ESPERAN</h2>
+            <p className="game-subtitle">{loadError ?? 'Ha ocurrido un error inesperado durante la carga.'}</p>
+            <button type="button" className="primary-button" onClick={() => startMatch(true)}>REINTENTAR</button>
+            <button type="button" className="secondary-button" onClick={() => {
+              if (expectedSessionRef.current > 0) {
+                workerRef.current?.postMessage({ type: 'pause', sessionId: expectedSessionRef.current, paused: true });
+              }
+              expectedSessionRef.current = 0;
+              setRendererGeneration((generation) => generation + 1);
+              setRendererReady(false);
+              setResourcesReady(false);
+              setResourceProgress(0);
+              setResourceLabel('Preparando escenario');
+              setBackend('loading');
+              setSnapshot(null);
+              setSnapshotSessionId(0);
+              setFirstSnapshot(false);
+              setFirstFrame(false);
+              cancelSelection();
+              modeRef.current = 'title';
+              setMode('title');
+              setLoadError(null);
+            }}>VOLVER A PORTADA</button>
           </div>
         </section>
       )}
@@ -295,7 +639,7 @@ export function App() {
             <p className="eyebrow">PARTIDA FINALIZADA · {formatTime(ui.seconds)}</p>
             <h2 className="game-title result-title">{resultTitle}</h2>
             <p className="game-subtitle">{resultText}</p>
-            <button type="button" className="primary-button" onClick={startMatch}>JUGAR OTRA VEZ</button>
+            <button type="button" className="primary-button" onClick={() => startMatch()}>JUGAR OTRA VEZ</button>
           </div>
         </section>
       )}

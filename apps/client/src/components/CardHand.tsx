@@ -18,28 +18,39 @@ interface CardHandProps {
 
 export function CardHand({ cards, selectedId, elixir, cooldowns, onSelect }: CardHandProps) {
   return (
-    <div className="hand-wrap" aria-label="Mazo de cartas">
+    <div className="hand-wrap" aria-label="Unidades y hechizos disponibles">
       {cards.map((card) => {
         const cooldown = cooldowns[card.id] ?? 0;
-        const disabled = elixir + 0.001 < card.cost || cooldown > 0;
+        const lacksElixir = elixir + 0.001 < card.cost;
+        const unavailable = lacksElixir || cooldown > 0;
+        const selected = selectedId === card.id;
+        const availability = cooldown > 0
+          ? `Disponible en ${Math.ceil(cooldown / 20)} segundos`
+          : lacksElixir
+            ? `Faltan ${Math.ceil(card.cost - elixir)} de elixir`
+            : 'Disponible';
+
         return (
           <button
             type="button"
-            className={`card${selectedId === card.id ? ' selected' : ''}${disabled ? ' disabled' : ''}`}
+            className={`card${selected ? ' selected' : ''}${unavailable ? ' unavailable' : ''}`}
             style={{
               '--accent': card.accent,
               '--atlas-x': `${(card.atlasIndex % 4) * (100 / 3)}%`,
               '--atlas-y': `${Math.floor(card.atlasIndex / 4) * 80 + 10}%`,
             } as React.CSSProperties}
             key={card.id}
-            title={`${card.description}${cooldown > 0 ? ` · ${Math.ceil(cooldown / 20)}s` : ''}`}
-            disabled={disabled}
+            title={`${card.description} · ${availability}`}
+            aria-label={`${card.name}, coste ${card.cost}. ${availability}`}
+            aria-pressed={selected}
+            data-unavailable={unavailable ? 'true' : undefined}
             onClick={() => onSelect(card.id)}
           >
             <span className="card-cost">{card.cost}</span>
             <span className="card-art" aria-hidden="true" />
             <span className="card-name">{card.name}</span>
             {cooldown > 0 && <span className="card-cooldown">{Math.ceil(cooldown / 20)}s</span>}
+            {cooldown <= 0 && lacksElixir && <span className="card-cooldown card-shortage">ELIXIR</span>}
           </button>
         );
       })}

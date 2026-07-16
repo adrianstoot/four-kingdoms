@@ -24,6 +24,8 @@ export interface MapGraph extends RawMapGraph {
   towerPads: TowerPad[];
 }
 
+const TOWER_PAD_EDGE_CLEARANCE = 0;
+
 function pointAt(points: readonly Vec2[], t: number): Vec2 {
   return sampleSmoothPath(buildSmoothPath(points), t).position;
 }
@@ -46,16 +48,28 @@ function buildGraph(raw: RawMapGraph): MapGraph {
       endT,
     });
     const laneT = first.reverse ? 0.88 : 0.12;
-    const position = pointAt(lane.points, laneT);
-    const aheadT = first.reverse ? laneT - 0.01 : laneT + 0.01;
-    const ahead = pointAt(lane.points, aheadT);
+    const centerline = pointAt(lane.points, laneT);
+    const ahead = pointAt(lane.points, first.reverse ? laneT - 0.01 : laneT + 0.01);
+    const yaw = Math.atan2(ahead.x - centerline.x, ahead.z - centerline.z);
+    const normal = { x: Math.cos(yaw), z: -Math.sin(yaw) };
+    const offset = lane.width * 0.5 + TOWER_PAD_EDGE_CLEARANCE;
+    const candidates = [1, -1].map((direction) => ({
+      x: centerline.x + normal.x * offset * direction,
+      z: centerline.z + normal.z * offset * direction,
+    }));
+    // Towers sit beyond the outside road edge; on radial ties use a stable side.
+    const firstRadius = Math.hypot(candidates[0]!.x, candidates[0]!.z);
+    const secondRadius = Math.hypot(candidates[1]!.x, candidates[1]!.z);
+    const position = Math.abs(firstRadius - secondRadius) < 1e-6
+      ? candidates[route.playerId % 2]!
+      : firstRadius > secondRadius ? candidates[0]! : candidates[1]!;
     towerPads.push({
       id: `pad:${route.playerId}:${lane.id}`,
       playerId: route.playerId,
       laneId: lane.id,
       routeIds: [route.id],
       position,
-      yaw: Math.atan2(ahead.x - position.x, ahead.z - position.z),
+      yaw,
     });
   }
   return { ...raw, deploymentZones, towerPads };
