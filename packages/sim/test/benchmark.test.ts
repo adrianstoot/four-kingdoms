@@ -16,12 +16,28 @@ describe('crowd benchmark harness', () => {
     expect(elapsed).toBeLessThan(5_000);
   });
 
-  it('creates a 1,000-unit stress snapshot', () => {
+  it('simulates a 1,000-unit stress crowd with bounded tick latency and no entity growth', () => {
     const game = createGame({ seed: 11, botPlayers: [], maxEntities: 1_200 });
     expect(game.spawnDebugCrowd(1_000)).toBe(1_000);
-    const snapshot = game.getSnapshot();
-    expect(snapshot.entities.count).toBe(1_000);
-    expect(snapshot.entities.x.byteLength).toBe(2_000);
-    expect(snapshot.stateHash).not.toBe(0);
+    for (let tick = 0; tick < 20; tick += 1) game.step();
+
+    const tickTimes: number[] = [];
+    let maximumCount = 0;
+    let finalSnapshot = game.getSnapshot();
+    for (let tick = 0; tick < 120; tick += 1) {
+      const started = performance.now();
+      finalSnapshot = game.step();
+      tickTimes.push(performance.now() - started);
+      maximumCount = Math.max(maximumCount, finalSnapshot.entities.count);
+    }
+
+    const ordered = [...tickTimes].sort((left, right) => left - right);
+    const p95 = ordered[Math.ceil(ordered.length * 0.95) - 1] ?? Number.POSITIVE_INFINITY;
+    expect(maximumCount).toBeLessThanOrEqual(1_000);
+    expect(finalSnapshot.entities.count).toBeGreaterThan(0);
+    expect(finalSnapshot.entities.x.byteLength).toBe(finalSnapshot.entities.count * Int16Array.BYTES_PER_ELEMENT);
+    expect(finalSnapshot.stateHash).not.toBe(0);
+    // Broad CI health gate; the hardware-specific render target is 33.3 ms.
+    expect(p95).toBeLessThan(100);
   });
 });

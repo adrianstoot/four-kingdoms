@@ -93,6 +93,8 @@ function normalizeUnitObject(value: unknown, index: number): NormalizedUnit | nu
     health,
     maxHealth,
     state: stringFrom(unit, ["state", "animation", "anim"], "walk"),
+    stateTick: Math.max(0, Math.trunc(numberFrom(unit, ["stateTick", "stateTicks"], 0))),
+    motionPhase: Math.max(0, Math.min(65_535, Math.trunc(numberFrom(unit, ["motionPhase", "phase"], 0)))),
   };
 }
 
@@ -117,6 +119,8 @@ function normalizeUnitSoA(source: UnknownRecord): NormalizedUnit[] {
       health,
       maxHealth,
       state: textAt(source, ["states", "state", "animation", "anim"], index, "walk"),
+      stateTick: Math.max(0, Math.trunc(numericAt(source, ["stateTick", "stateTicks"], index, 0))),
+      motionPhase: Math.max(0, Math.min(65_535, Math.trunc(numericAt(source, ["motionPhase", "phase"], index, 0)))),
     });
   }
   return result;

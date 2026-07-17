@@ -1,8 +1,9 @@
 import type { GameSnapshot } from '@kingdoms/sim';
 import type { CameraPose } from '../game/types';
 import { normalizeSnapshot } from '../game/snapshot';
+import { FACTION_CSS_COLORS } from '../game/factions';
 
-const colors = ['#3488c9', '#d94e41', '#43a962', '#a146c3'];
+const colors = FACTION_CSS_COLORS;
 const WORLD_TO_MAP = 0.64;
 const lanes = [
   'M50 8 C70 8 92 29 92 50',

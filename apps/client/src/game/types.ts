@@ -66,7 +66,8 @@ export interface WorldRendererCallbacks {
   onReady?: (backend: "webgpu" | "webgl2") => void;
   onResourcesReady?: () => void;
   onResourceProgress?: (progress: RendererResourceProgress) => void;
-  onFirstFrame?: () => void;
+  /** Published only after a snapshot from this session has been rendered. */
+  onFirstFrame?: (sessionId: number) => void;
   onCameraPoseChange?: (pose: CameraPose) => void;
   onCancelSelection?: () => void;
 }
@@ -81,6 +82,10 @@ export interface NormalizedUnit {
   health: number;
   maxHealth: number;
   state: string;
+  /** Simulation ticks elapsed in the current state. */
+  stateTick: number;
+  /** Quantized [0, 65535] phase used to select an instanced animation frame. */
+  motionPhase: number;
 }
 
 export interface NormalizedCastle {

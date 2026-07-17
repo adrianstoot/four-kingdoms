@@ -96,11 +96,38 @@ export interface EntitySnapshotTable {
   targetId: Int32Array;
 }
 
+export interface ProjectileCastEvent {
+  type: 'projectile-cast';
+  tick: number;
+  projectileId: number;
+  sourceId: number;
+  targetType: 'entity' | 'castle';
+  targetId: number;
+  origin: Vec2;
+  destination: Vec2;
+  impactTick: number;
+}
+
+export interface ProjectileImpactEvent {
+  type: 'projectile-impact';
+  tick: number;
+  projectileId: number;
+  sourceId: number;
+  targetType: 'entity' | 'castle';
+  targetId: number;
+  origin: Vec2;
+  destination: Vec2;
+  impactTick: number;
+  hit: boolean;
+}
+
 export type SimEvent =
   | { type: 'spawn'; tick: number; entityId: number; playerId: PlayerId; archetype: ArchetypeCode }
   | { type: 'damage'; tick: number; sourceId: number; targetType: 'entity' | 'castle'; targetId: number; amount: number }
   | { type: 'death'; tick: number; entityId: number; playerId: PlayerId }
   | { type: 'capture'; tick: number; playerId: PlayerId | null }
+  | ProjectileCastEvent
+  | ProjectileImpactEvent
   | { type: 'spell-cast'; tick: number; castId: number; playerId: PlayerId; cardId: SpellCardId; origin: Vec2; destination: Vec2; impactTick: number }
   | { type: 'spell-impact'; tick: number; castId: number; playerId: PlayerId; cardId: SpellCardId; origin: Vec2; destination: Vec2; impactTick: number; targetIds: number[] }
   | { type: 'elimination'; tick: number; playerId: PlayerId }

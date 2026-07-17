@@ -74,6 +74,8 @@ function normalizeSoA(source: RecordValue): NormalizedUnit[] {
       health: hp,
       maxHealth: maxHp,
       state: stateName(rawState),
+      stateTick: Math.max(0, Math.trunc(numberAt(source, ["stateTick", "stateTicks"], index, 0))),
+      motionPhase: Math.max(0, Math.min(65_535, Math.trunc(numberAt(source, ["motionPhase", "phase"], index, 0)))),
     });
   }
   return units;
@@ -100,6 +102,8 @@ function normalizeObjectEntity(value: unknown, index: number): NormalizedUnit | 
     health: hp,
     maxHealth: maxHp,
     state,
+    stateTick: Math.max(0, Math.trunc(number(entity.stateTick, number(entity.stateTicks, 0)))),
+    motionPhase: Math.max(0, Math.min(65_535, Math.trunc(number(entity.motionPhase, number(entity.phase, 0))))),
   };
 }
 

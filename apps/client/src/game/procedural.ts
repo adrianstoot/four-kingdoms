@@ -1,22 +1,24 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import terrainMapUrl from "../assets/terrain-map.png";
-import { createDetailedUnitGeometry } from "./units/detailedUnits";
+import { FACTION_STYLES } from "./factions";
+import { validateTerrainImage } from "./terrainResource";
+import {
+  createDetailedUnitGeometry,
+  DETAILED_UNIT_METRICS,
+} from "./units/detailedUnits";
 export { createDetailedUnitRigGeometry } from "./units/detailedUnits";
 
 export const MAP_HALF_SIZE = 72;
 export const LOCAL_PLAYER_ID = 0;
 export const MAX_RENDERED_UNITS = 768;
 
-export const FACTIONS = [
-  { id: "north", name: "Reino Azul", color: 0x2f8fd1, dark: 0x153c63, accent: 0x9adfff, x: 0, z: -60 },
-  { id: "east", name: "Pacto Esmeralda", color: 0x43a85f, dark: 0x214d2e, accent: 0xa7f2b5, x: 60, z: 0 },
-  { id: "south", name: "Dominio Áureo", color: 0xd69a2d, dark: 0x6e4619, accent: 0xffdf86, x: 0, z: 60 },
-  { id: "west", name: "Legión Carmesí", color: 0xc94a3d, dark: 0x65251f, accent: 0xffa097, x: -60, z: 0 },
-] as const;
+export const FACTIONS = FACTION_STYLES;
 export const UNIT_ARCHETYPES = ["guard", "archer", "knight", "giant", "commander"] as const;
 export type UnitArchetype = (typeof UNIT_ARCHETYPES)[number];
-export const UNIT_POSES = ["idle", "walkA", "walkB", "attack", "hit", "death"] as const;
+export const UNIT_POSES = [
+  "idle", "walkA", "walkB", "attackWindup", "attack", "attackRecover", "hit", "death", "spawn",
+] as const;
 export type UnitPose = (typeof UNIT_POSES)[number];
 
 /**
@@ -27,13 +29,7 @@ export const UNIT_METRICS: Readonly<Record<UnitArchetype, {
   height: number;
   radius: number;
   eyeHeight: number;
-}>> = {
-  guard: { height: 1.7, radius: 0.45, eyeHeight: 1.48 },
-  archer: { height: 1.68, radius: 0.42, eyeHeight: 1.46 },
-  knight: { height: 2.25, radius: 0.6, eyeHeight: 2.02 },
-  giant: { height: 2.5, radius: 0.85, eyeHeight: 2.15 },
-  commander: { height: 1.85, radius: 0.52, eyeHeight: 1.58 },
-};
+}>> = DETAILED_UNIT_METRICS;
 
 export interface RoadSample {
   laneId: string;
@@ -443,7 +439,35 @@ function createBoardTopGeometry(textureWorldSize = 144): THREE.ShapeGeometry {
   return geometry;
 }
 
-export function createTerrain(): THREE.Group {
+async function loadTerrainTexture(): Promise<THREE.Texture> {
+  let texture: THREE.Texture;
+  try {
+    texture = await new THREE.TextureLoader().loadAsync(terrainMapUrl);
+  } catch (cause) {
+    throw new Error("terrain-map.png could not be loaded.", { cause });
+  }
+
+  try {
+    validateTerrainImage(texture.image);
+  } catch (error) {
+    texture.dispose();
+    throw error;
+  }
+
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.anisotropy = 8;
+  texture.generateMipmaps = true;
+  return texture;
+}
+
+export async function createTerrain(): Promise<THREE.Group> {
+  // Loading and validating this mandatory authored asset is part of renderer
+  // readiness; callers must await it before publishing resourcesReady.
+  const terrainTexture = await loadTerrainTexture();
   const group = new THREE.Group();
   group.name = "illustrated-board";
   const baseTexture = createPixelTexture(
@@ -461,14 +485,6 @@ export function createTerrain(): THREE.Group {
   base.receiveShadow = true;
   group.add(base);
 
-  const terrainTexture = new THREE.TextureLoader().load(terrainMapUrl);
-  terrainTexture.colorSpace = THREE.SRGBColorSpace;
-  terrainTexture.wrapS = THREE.ClampToEdgeWrapping;
-  terrainTexture.wrapT = THREE.ClampToEdgeWrapping;
-  terrainTexture.minFilter = THREE.LinearMipmapLinearFilter;
-  terrainTexture.magFilter = THREE.LinearFilter;
-  terrainTexture.anisotropy = 8;
-  terrainTexture.generateMipmaps = true;
   const illustratedLayer = new THREE.Mesh(
     createBoardTopGeometry(144),
     new THREE.MeshBasicMaterial({ color: 0xffffff, map: terrainTexture, toneMapped: false }),

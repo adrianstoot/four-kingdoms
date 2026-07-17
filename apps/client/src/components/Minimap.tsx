@@ -1,7 +1,8 @@
 import type { GameSnapshot } from '@kingdoms/sim';
 import type { ReactElement } from 'react';
+import { FACTION_CSS_COLORS } from '../game/factions';
 
-const factionColors = ['#3e8bd7', '#d8574f', '#55a86b', '#9b62d1'];
+const factionColors = FACTION_CSS_COLORS;
 
 interface MinimapProps {
   snapshot: GameSnapshot | null;

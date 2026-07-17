@@ -39,7 +39,7 @@ type ExtendedRenderer = WorldRenderer & {
 type ExtendedRendererCallbacks = NonNullable<ConstructorParameters<typeof WorldRenderer>[1]> & {
   onResourcesReady?: () => void;
   onResourceProgress?: (progress: RendererResourceProgress) => void;
-  onFirstFrame?: () => void;
+  onFirstFrame?: (sessionId: number) => void;
   onCameraPoseChange?: (pose: CameraPose) => void;
   onCancelSelection?: () => void;
   onError?: (error: Error) => void;
@@ -52,11 +52,9 @@ function toError(error: unknown): Error {
 export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function GameCanvas(props, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<ExtendedRenderer | null>(null);
-  const initializedRef = useRef(false);
   const latestSnapshotRef = useRef<GameSnapshot | null>(props.snapshot);
   const latestSessionRef = useRef(props.snapshotSessionId);
   const reportedFrameSessionRef = useRef(0);
-  const fallbackFrameRef = useRef<number[]>([]);
   const callbacksRef = useRef({
     onPlacement: props.onPlacement,
     onHover: props.onHover,
@@ -85,21 +83,15 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   latestSnapshotRef.current = props.snapshot;
   latestSessionRef.current = props.snapshotSessionId;
 
-  const reportSessionFrame = () => {
-    const sessionId = latestSessionRef.current;
-    if (!initializedRef.current || !latestSnapshotRef.current || sessionId <= 0 || reportedFrameSessionRef.current === sessionId) return;
+  const reportSessionFrame = (sessionId: number) => {
+    if (
+      !latestSnapshotRef.current
+      || sessionId <= 0
+      || latestSessionRef.current !== sessionId
+      || reportedFrameSessionRef.current === sessionId
+    ) return;
     reportedFrameSessionRef.current = sessionId;
     callbacksRef.current.onFirstFrame(sessionId);
-  };
-
-  const scheduleSessionFrameFallback = () => {
-    for (const frame of fallbackFrameRef.current) cancelAnimationFrame(frame);
-    fallbackFrameRef.current = [];
-    const first = requestAnimationFrame(() => {
-      const second = requestAnimationFrame(reportSessionFrame);
-      fallbackFrameRef.current = [second];
-    });
-    fallbackFrameRef.current = [first];
   };
 
   useImperativeHandle(ref, () => ({
@@ -132,33 +124,19 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
     rendererRef.current = renderer;
     let disposed = false;
 
-    void renderer.init()
-      .then(() => {
-        if (disposed) return;
-        initializedRef.current = true;
-        // Current procedural assets are synchronous. These calls are an
-        // idempotent fallback for renderers that do not publish progress yet.
-        callbacksRef.current.onResourceProgress({ progress: 1, label: 'Recursos listos' });
-        callbacksRef.current.onResourcesReady();
-        scheduleSessionFrameFallback();
-      })
-      .catch((error: unknown) => {
-        if (!disposed) callbacksRef.current.onError(toError(error));
-      });
+    void renderer.init().catch((error: unknown) => {
+      if (!disposed) callbacksRef.current.onError(toError(error));
+    });
 
     return () => {
       disposed = true;
-      initializedRef.current = false;
-      for (const frame of fallbackFrameRef.current) cancelAnimationFrame(frame);
-      fallbackFrameRef.current = [];
       renderer.dispose();
       rendererRef.current = null;
     };
   }, []);
 
   useEffect(() => {
-    rendererRef.current?.setSnapshot(props.snapshot);
-    if (props.snapshot && props.snapshotSessionId > 0 && initializedRef.current) scheduleSessionFrameFallback();
+    rendererRef.current?.setSnapshot(props.snapshot, props.snapshotSessionId);
   }, [props.snapshot, props.snapshotSessionId]);
 
   useEffect(() => { rendererRef.current?.setSelectedCard(props.selectedCard); }, [props.selectedCard]);

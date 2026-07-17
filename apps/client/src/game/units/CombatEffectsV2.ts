@@ -2,17 +2,23 @@ import * as THREE from "three";
 import { MAP_GRAPH } from "@kingdoms/content";
 import type { SimEvent } from "@kingdoms/sim";
 import type { NormalizedSnapshot, NormalizedUnit } from "../types";
+import { FACTION_COLORS } from "../factions";
 
 const IMPACT_PARTICLES = 224;
+const DEATH_PARTICLES = 192;
 const SPELL_PARTICLES = 288;
+const SMOKE_PARTICLES = 128;
 const IMPACT_RINGS = 40;
+const DEATH_RINGS = 32;
 const SPELL_RINGS = 36;
+const BURN_MARKS = 32;
 const FIREBALLS = 8;
+const ARROWS = 128;
 const LIGHTNING_EFFECTS = 16;
 const LIGHTNING_SEGMENTS = 448;
 const TICK_MS = 50;
+const MIN_VISIBLE_ARROW_MS = 150;
 const UP = new THREE.Vector3(0, 1, 0);
-const FACTION_COLORS = [0x4f93d2, 0xd14c3e, 0x47a965, 0xa64fc1] as const;
 
 interface Point { x: number; y: number; z: number; owner: number }
 interface Particle {
@@ -24,10 +30,20 @@ interface Ring {
   active: boolean; bornAt: number; lifetime: number;
   x: number; y: number; z: number; startScale: number; endScale: number; color: number;
 }
+interface BurnMark {
+  active: boolean; bornAt: number; lifetime: number;
+  x: number; y: number; z: number; scale: number; rotation: number; color: number;
+}
 interface Fireball {
   active: boolean; castId: number; bornAt: number; duration: number; owner: number;
   startX: number; startZ: number; endX: number; endZ: number;
   arcHeight: number; seed: number; lastTrailStep: number;
+}
+interface Arrow {
+  active: boolean; projectileId: number; bornAt: number; duration: number;
+  targetType: 'entity' | 'castle'; targetId: number;
+  startX: number; startY: number; startZ: number;
+  endX: number; endY: number; endZ: number; arcHeight: number;
 }
 interface Segment { ax: number; ay: number; az: number; bx: number; by: number; bz: number }
 interface Connection { from: Point; to: Point; seed: number }
@@ -56,11 +72,25 @@ function ring(): Ring {
     x: 0, y: 0, z: 0, startScale: 0, endScale: 0, color: 0xffffff,
   };
 }
+function burnMark(): BurnMark {
+  return {
+    active: false, bornAt: 0, lifetime: 0,
+    x: 0, y: 0, z: 0, scale: 0, rotation: 0, color: 0x38251a,
+  };
+}
 function fireball(): Fireball {
   return {
     active: false, castId: -1, bornAt: 0, duration: 0, owner: 0,
     startX: 0, startZ: 0, endX: 0, endZ: 0,
     arcHeight: 0, seed: 0, lastTrailStep: -1,
+  };
+}
+function arrow(): Arrow {
+  return {
+    active: false, projectileId: -1, bornAt: 0, duration: 0,
+    targetType: 'entity', targetId: -1,
+    startX: 0, startY: 0, startZ: 0,
+    endX: 0, endY: 0, endZ: 0, arcHeight: 0,
   };
 }
 function lightning(): Lightning {
@@ -105,14 +135,37 @@ export class CombatEffects {
   private readonly scene: THREE.Scene;
   private readonly group = new THREE.Group();
   private readonly particles = Array.from({ length: IMPACT_PARTICLES }, particle);
+  private readonly deathParticles = Array.from({ length: DEATH_PARTICLES }, particle);
   private readonly spellParticles = Array.from({ length: SPELL_PARTICLES }, particle);
+  private readonly smokeParticles = Array.from({ length: SMOKE_PARTICLES }, particle);
   private readonly rings = Array.from({ length: IMPACT_RINGS }, ring);
+  private readonly deathRings = Array.from({ length: DEATH_RINGS }, ring);
   private readonly spellRings = Array.from({ length: SPELL_RINGS }, ring);
+  private readonly burnMarks = Array.from({ length: BURN_MARKS }, burnMark);
   private readonly fireballs = Array.from({ length: FIREBALLS }, fireball);
+  private readonly arrows = Array.from({ length: ARROWS }, arrow);
   private readonly lightning = Array.from({ length: LIGHTNING_EFFECTS }, lightning);
 
   private readonly particleMesh = makeMesh(new THREE.IcosahedronGeometry(0.24, 0), additive(0.9), IMPACT_PARTICLES, 16);
+  private readonly deathParticleMesh = makeMesh(
+    new THREE.IcosahedronGeometry(0.26, 0),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff, transparent: true, opacity: 0.72, depthWrite: false,
+      blending: THREE.NormalBlending, toneMapped: true,
+    }),
+    DEATH_PARTICLES,
+    14,
+  );
   private readonly spellParticleMesh = makeMesh(new THREE.IcosahedronGeometry(0.22, 0), additive(0.94), SPELL_PARTICLES, 19);
+  private readonly smokeParticleMesh = makeMesh(
+    new THREE.IcosahedronGeometry(0.5, 1),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff, transparent: true, opacity: 0.34, depthWrite: false,
+      blending: THREE.NormalBlending, toneMapped: true,
+    }),
+    SMOKE_PARTICLES,
+    17,
+  );
   private readonly ringMesh = makeMesh(
     new THREE.RingGeometry(0.72, 1, 24),
     new THREE.MeshBasicMaterial({
@@ -131,8 +184,39 @@ export class CombatEffects {
     SPELL_RINGS,
     18,
   );
+  private readonly deathRingMesh = makeMesh(
+    new THREE.RingGeometry(0.7, 1, 24),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff, transparent: true, opacity: 0.48, side: THREE.DoubleSide,
+      depthWrite: false, blending: THREE.NormalBlending, toneMapped: true,
+    }),
+    DEATH_RINGS,
+    13,
+  );
+  private readonly burnMarkMesh = makeMesh(
+    new THREE.CircleGeometry(1, 18),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff, transparent: true, opacity: 0.46, side: THREE.DoubleSide,
+      depthWrite: false, depthTest: true, blending: THREE.NormalBlending, toneMapped: true,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+    }),
+    BURN_MARKS,
+    6,
+  );
   private readonly fireballCoreMesh = makeMesh(new THREE.IcosahedronGeometry(0.34, 1), additive(1), FIREBALLS, 22);
   private readonly fireballShellMesh = makeMesh(new THREE.DodecahedronGeometry(0.66, 0), additive(0.38), FIREBALLS, 21);
+  private readonly arrowShaftMesh = makeMesh(
+    new THREE.CylinderGeometry(0.026, 0.026, 0.68, 5),
+    new THREE.MeshBasicMaterial({ color: 0x6d3d20, toneMapped: true }),
+    ARROWS,
+    20,
+  );
+  private readonly arrowHeadMesh = makeMesh(
+    new THREE.ConeGeometry(0.09, 0.22, 5),
+    new THREE.MeshBasicMaterial({ color: 0xe6d5ac, toneMapped: true }),
+    ARROWS,
+    20,
+  );
   private readonly lightningCoreMesh = makeMesh(
     new THREE.CylinderGeometry(0.06, 0.06, 1, 5, 1, true),
     additive(0.98),
@@ -147,10 +231,15 @@ export class CombatEffects {
   );
 
   private particleCursor = 0;
+  private deathParticleCursor = 0;
   private spellParticleCursor = 0;
+  private smokeParticleCursor = 0;
   private ringCursor = 0;
+  private deathRingCursor = 0;
   private spellRingCursor = 0;
+  private burnMarkCursor = 0;
   private fireballCursor = 0;
+  private arrowCursor = 0;
   private lightningCursor = 0;
   private effectSerial = 1;
   private lastConsumedTick = Number.MIN_SAFE_INTEGER;
@@ -162,6 +251,7 @@ export class CombatEffects {
   private readonly quaternion = new THREE.Quaternion();
   private readonly direction = new THREE.Vector3();
   private readonly midpoint = new THREE.Vector3();
+  private readonly nextPosition = new THREE.Vector3();
   private readonly color = new THREE.Color();
   private readonly horizontalRing = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI * 0.5, 0, 0));
 
@@ -169,8 +259,11 @@ export class CombatEffects {
     this.scene = scene;
     this.group.name = "combat-effects";
     this.group.add(
+      this.burnMarkMesh,
+      this.deathRingMesh, this.deathParticleMesh, this.smokeParticleMesh,
       this.ringMesh, this.particleMesh, this.spellRingMesh, this.spellParticleMesh,
-      this.fireballShellMesh, this.fireballCoreMesh, this.lightningGlowMesh, this.lightningCoreMesh,
+      this.fireballShellMesh, this.fireballCoreMesh, this.arrowShaftMesh, this.arrowHeadMesh,
+      this.lightningGlowMesh, this.lightningCoreMesh,
     );
     this.scene.add(this.group);
   }
@@ -184,6 +277,9 @@ export class CombatEffects {
     if (this.disposed || snapshotTick === this.lastConsumedTick) return;
     this.lastConsumedTick = snapshotTick;
     const now = performance.now();
+    // Projectile damage follows an entity identity, so its visible trajectory
+    // follows that same moving identity instead of a stale launch coordinate.
+    this.retargetActiveArrows(current, previous);
     events.forEach((rawEvent, index) => {
       const event = rawEvent as CompatibleEvent;
       const seed = (event.tick * 1_103_515_245 + index * 12_345 + this.effectSerial++) | 0;
@@ -198,6 +294,14 @@ export class CombatEffects {
         case "death": {
           const point = this.entityPoint(event.entityId, current, previous);
           if (point) this.spawnDeath(now, point, seed);
+          break;
+        }
+        case "projectile-cast": {
+          this.spawnArrowFlight(now, event, current, previous);
+          break;
+        }
+        case "projectile-impact": {
+          this.completeArrow(event.projectileId);
           break;
         }
         case "spell-cast": {
@@ -251,11 +355,16 @@ export class CombatEffects {
 
   update(now: number): void {
     if (this.disposed) return;
+    this.updateArrows(now);
     this.updateFireballs(now);
     this.updateParticlePool(now, this.particles, this.particleMesh);
+    this.updateParticlePool(now, this.deathParticles, this.deathParticleMesh);
     this.updateParticlePool(now, this.spellParticles, this.spellParticleMesh);
+    this.updateParticlePool(now, this.smokeParticles, this.smokeParticleMesh);
     this.updateRingPool(now, this.rings, this.ringMesh);
+    this.updateRingPool(now, this.deathRings, this.deathRingMesh);
     this.updateRingPool(now, this.spellRings, this.spellRingMesh);
+    this.updateBurnMarks(now);
     this.updateLightning(now);
   }
 
@@ -264,8 +373,10 @@ export class CombatEffects {
     this.disposed = true;
     this.scene.remove(this.group);
     const meshes = [
+      this.deathParticleMesh, this.smokeParticleMesh, this.deathRingMesh, this.burnMarkMesh,
       this.particleMesh, this.spellParticleMesh, this.ringMesh, this.spellRingMesh,
-      this.fireballCoreMesh, this.fireballShellMesh, this.lightningCoreMesh, this.lightningGlowMesh,
+      this.fireballCoreMesh, this.fireballShellMesh, this.arrowShaftMesh, this.arrowHeadMesh,
+      this.lightningCoreMesh, this.lightningGlowMesh,
     ];
     for (const mesh of meshes) {
       mesh.geometry.dispose();
@@ -313,7 +424,7 @@ export class CombatEffects {
     for (let index = 0; index < 12; index += 1) {
       const angle = this.noise(seed + index * 29) * Math.PI * 2;
       const speed = 1.2 + this.noise(seed + index * 29 + 1) * 3.5;
-      this.spawnParticle({
+      this.spawnDeathParticle({
         now, x: point.x, y: Math.max(0.35, point.y * 0.45), z: point.z,
         vx: Math.cos(angle) * speed,
         vy: 1.2 + this.noise(seed + index * 29 + 2) * 3.8,
@@ -324,7 +435,106 @@ export class CombatEffects {
         spin: angle,
       });
     }
-    this.spawnRing(now, point.x, 0.18, point.z, 0.35, 1.9, 520, factionColor);
+    this.spawnDeathRing(now, point.x, 0.18, point.z, 0.35, 1.9, 520, factionColor);
+  }
+
+  private spawnArrowFlight(
+    now: number,
+    event: Extract<SimEvent, { type: "projectile-cast" }>,
+    current: NormalizedSnapshot,
+    previous: NormalizedSnapshot,
+  ): void {
+    const source = this.entityPoint(event.sourceId, current, previous);
+    const target = event.targetType === "entity"
+      ? this.entityPoint(event.targetId, current, previous)
+      : this.castlePoint(event.targetId);
+    const slot = this.arrows[this.arrowCursor];
+    this.arrowCursor = (this.arrowCursor + 1) % this.arrows.length;
+    if (!slot) return;
+    const horizontalDistance = Math.hypot(
+      event.destination.x - event.origin.x,
+      event.destination.z - event.origin.z,
+    );
+    Object.assign(slot, {
+      active: true,
+      projectileId: event.projectileId,
+      bornAt: now,
+      duration: Math.max(MIN_VISIBLE_ARROW_MS, (event.impactTick - event.tick) * TICK_MS),
+      targetType: event.targetType,
+      targetId: event.targetId,
+      startX: event.origin.x,
+      startY: Math.max(1.08, (source?.y ?? 1.46) * 0.84),
+      startZ: event.origin.z,
+      endX: event.destination.x,
+      endY: event.targetType === "castle"
+        ? Math.max(2.4, (target?.y ?? 4.8) * 0.62)
+        : Math.max(0.72, (target?.y ?? 1.48) * 0.62),
+      endZ: event.destination.z,
+      arcHeight: THREE.MathUtils.clamp(horizontalDistance * 0.055, 0.18, 0.72),
+    });
+  }
+
+  private retargetActiveArrows(
+    current: NormalizedSnapshot,
+    previous: NormalizedSnapshot,
+  ): void {
+    for (const slot of this.arrows) {
+      if (!slot.active) continue;
+      const target = slot.targetType === "entity"
+        ? this.entityPoint(slot.targetId, current, previous)
+        : this.castlePoint(slot.targetId);
+      if (!target) continue;
+      slot.endX = target.x;
+      slot.endZ = target.z;
+      slot.endY = slot.targetType === "castle"
+        ? Math.max(2.4, target.y * 0.62)
+        : Math.max(0.72, target.y * 0.62);
+    }
+  }
+  private completeArrow(projectileId: number): void {
+    const slot = this.arrows.find((candidate) => candidate.active && candidate.projectileId === projectileId);
+    if (slot) slot.active = false;
+  }
+
+  private arrowPoint(slot: Arrow, progress: number, target: THREE.Vector3): THREE.Vector3 {
+    const t = THREE.MathUtils.clamp(progress, 0, 1);
+    return target.set(
+      THREE.MathUtils.lerp(slot.startX, slot.endX, t),
+      THREE.MathUtils.lerp(slot.startY, slot.endY, t) + Math.sin(t * Math.PI) * slot.arcHeight,
+      THREE.MathUtils.lerp(slot.startZ, slot.endZ, t),
+    );
+  }
+
+  private updateArrows(now: number): void {
+    let count = 0;
+    for (const slot of this.arrows) {
+      if (!slot.active) continue;
+      const progress = (now - slot.bornAt) / Math.max(1, slot.duration);
+      if (progress >= 1) {
+        slot.active = false;
+        continue;
+      }
+      this.arrowPoint(slot, progress, this.position);
+      this.arrowPoint(slot, Math.min(1, progress + 0.025), this.nextPosition);
+      this.direction.copy(this.nextPosition).sub(this.position);
+      if (this.direction.lengthSq() < 0.000001) {
+        this.direction.set(slot.endX - slot.startX, slot.endY - slot.startY, slot.endZ - slot.startZ);
+      }
+      this.direction.normalize();
+      this.quaternion.setFromUnitVectors(UP, this.direction);
+      this.scale.set(1, 1, 1);
+      this.matrix.compose(this.position, this.quaternion, this.scale);
+      this.arrowShaftMesh.setMatrixAt(count, this.matrix);
+
+      this.midpoint.copy(this.position).addScaledVector(this.direction, 0.43);
+      this.matrix.compose(this.midpoint, this.quaternion, this.scale);
+      this.arrowHeadMesh.setMatrixAt(count, this.matrix);
+      count += 1;
+    }
+    for (const mesh of [this.arrowShaftMesh, this.arrowHeadMesh]) {
+      mesh.count = count;
+      mesh.instanceMatrix.needsUpdate = true;
+    }
   }
 
   private spawnFireballFlight(
@@ -395,6 +605,19 @@ export class CombatEffects {
             color: spark === 0 ? 0xffb337 : 0xff5a1f, spin: angle,
           });
         }
+        if (step % 2 === 0) {
+          const smokeSeed = slot.seed + step * 131;
+          const smokeAngle = this.noise(smokeSeed) * Math.PI * 2;
+          this.spawnSmokeParticle({
+            now, x: this.position.x + Math.cos(smokeAngle) * 0.12, y: this.position.y + 0.08,
+            z: this.position.z + Math.sin(smokeAngle) * 0.12,
+            vx: Math.cos(smokeAngle) * 0.18, vy: 0.28 + this.noise(smokeSeed + 1) * 0.4,
+            vz: Math.sin(smokeAngle) * 0.18, gravity: -0.08,
+            lifetime: 620 + this.noise(smokeSeed + 2) * 360,
+            startScale: 0.38 + this.noise(smokeSeed + 3) * 0.24, endScale: 1.35 + this.noise(smokeSeed + 4) * 0.5,
+            color: this.noise(smokeSeed + 5) > 0.55 ? 0x4a4039 : 0x655246, spin: smokeAngle,
+          });
+        }
       }
       slot.lastTrailStep = Math.max(slot.lastTrailStep, trailStep);
       this.fireballPoint(slot, progress, this.position);
@@ -420,24 +643,47 @@ export class CombatEffects {
   private spawnFireballImpact(now: number, point: Point, seed: number): void {
     this.spawnSpellRing(now, point.x, 0.2, point.z, 0.18, 5.5, 660, 0xff5720);
     this.spawnSpellRing(now, point.x, 0.23, point.z, 0.12, 3.6, 430, 0xffd563);
-    this.spawnSpellRing(now, point.x, 0.18, point.z, 0.8, 2.4, 1_650, 0x8e351d);
-    for (let index = 0; index < 44; index += 1) {
+    this.spawnBurnMark(now, point.x, point.z, seed);
+    for (let index = 0; index < 34; index += 1) {
       const angle = this.noise(seed + index * 41) * Math.PI * 2;
       const radial = 2.4 + this.noise(seed + index * 41 + 1) * 8.6;
-      const smoke = index >= 34;
       this.spawnSpellParticle({
         now,
-        x: point.x + Math.cos(angle) * (smoke ? 0.5 : 0.15),
-        y: 0.42 + this.noise(seed + index * 41 + 2) * (smoke ? 1.1 : 0.65),
-        z: point.z + Math.sin(angle) * (smoke ? 0.5 : 0.15),
-        vx: Math.cos(angle) * (smoke ? radial * 0.18 : radial),
-        vy: smoke ? 2.6 + this.noise(seed + index * 41 + 3) * 2.8 : 3.8 + this.noise(seed + index * 41 + 3) * 9.2,
-        vz: Math.sin(angle) * (smoke ? radial * 0.18 : radial),
-        gravity: smoke ? 1.6 : 13,
-        lifetime: smoke ? 1_050 + this.noise(seed + index * 41 + 4) * 550 : 480 + this.noise(seed + index * 41 + 4) * 460,
-        startScale: smoke ? 1.8 + this.noise(seed + index * 41 + 5) : index < 7 ? 2.35 : 0.72 + this.noise(seed + index * 41 + 5) * 1.2,
-        endScale: smoke ? 0.35 : 0.06,
-        color: smoke ? 0x6b5544 : index % 4 === 0 ? 0xfff2ad : index % 2 === 0 ? 0xffa22e : 0xef421d,
+        x: point.x + Math.cos(angle) * 0.15,
+        y: 0.42 + this.noise(seed + index * 41 + 2) * 0.65,
+        z: point.z + Math.sin(angle) * 0.15,
+        vx: Math.cos(angle) * radial,
+        vy: 3.8 + this.noise(seed + index * 41 + 3) * 9.2,
+        vz: Math.sin(angle) * radial,
+        gravity: 13,
+        lifetime: 480 + this.noise(seed + index * 41 + 4) * 460,
+        startScale: index < 7 ? 2.35 : 0.72 + this.noise(seed + index * 41 + 5) * 1.2,
+        endScale: 0.06,
+        color: index % 4 === 0 ? 0xfff2ad : index % 2 === 0 ? 0xffa22e : 0xef421d,
+        spin: angle,
+      });
+    }
+    this.spawnFireballSmoke(now, point, seed);
+  }
+
+  private spawnFireballSmoke(now: number, point: Point, seed: number): void {
+    for (let index = 0; index < 12; index += 1) {
+      const sample = seed + 10_003 + index * 67;
+      const angle = this.noise(sample) * Math.PI * 2;
+      const radial = 0.32 + this.noise(sample + 1) * 1.15;
+      this.spawnSmokeParticle({
+        now,
+        x: point.x + Math.cos(angle) * (0.2 + this.noise(sample + 2) * 0.65),
+        y: 0.48 + this.noise(sample + 3) * 0.85,
+        z: point.z + Math.sin(angle) * (0.2 + this.noise(sample + 4) * 0.65),
+        vx: Math.cos(angle) * radial,
+        vy: 1.35 + this.noise(sample + 5) * 1.75,
+        vz: Math.sin(angle) * radial,
+        gravity: 0.32,
+        lifetime: 1_550 + this.noise(sample + 6) * 950,
+        startScale: 0.72 + this.noise(sample + 7) * 0.55,
+        endScale: 2.8 + this.noise(sample + 8) * 1.25,
+        color: index % 3 === 0 ? 0x332f2c : index % 2 === 0 ? 0x55483f : 0x6a574a,
         spin: angle,
       });
     }
@@ -551,8 +797,16 @@ export class CombatEffects {
     this.particleCursor = this.writeParticle(this.particles, this.particleCursor, options);
   }
 
+  private spawnDeathParticle(options: ParticleOptions): void {
+    this.deathParticleCursor = this.writeParticle(this.deathParticles, this.deathParticleCursor, options);
+  }
+
   private spawnSpellParticle(options: ParticleOptions): void {
     this.spellParticleCursor = this.writeParticle(this.spellParticles, this.spellParticleCursor, options);
+  }
+
+  private spawnSmokeParticle(options: ParticleOptions): void {
+    this.smokeParticleCursor = this.writeParticle(this.smokeParticles, this.smokeParticleCursor, options);
   }
 
   private writeRing(
@@ -588,6 +842,13 @@ export class CombatEffects {
     );
   }
 
+  private spawnDeathRing(
+    now: number, x: number, y: number, z: number,
+    startScale: number, endScale: number, lifetime: number, color: number,
+  ): void {
+    this.deathRingCursor = this.writeRing(this.deathRings, this.deathRingCursor, now, x, y, z, startScale, endScale, lifetime, color);
+  }
+
   private spawnSpellRing(
     now: number,
     x: number,
@@ -601,6 +862,18 @@ export class CombatEffects {
     this.spellRingCursor = this.writeRing(
       this.spellRings, this.spellRingCursor, now, x, y, z, startScale, endScale, lifetime, color,
     );
+  }
+
+  private spawnBurnMark(now: number, x: number, z: number, seed: number): void {
+    const slot = this.burnMarks[this.burnMarkCursor];
+    this.burnMarkCursor = (this.burnMarkCursor + 1) % this.burnMarks.length;
+    if (!slot) return;
+    Object.assign(slot, {
+      active: true, bornAt: now, lifetime: 18_000, x, y: 0.085, z,
+      scale: 2.55 + this.noise(seed + 50_021) * 0.75,
+      rotation: this.noise(seed + 50_023) * Math.PI * 2,
+      color: this.noise(seed + 50_027) > 0.5 ? 0x2d1d16 : 0x43271a,
+    });
   }
 
   private updateParticlePool(now: number, slots: Particle[], mesh: THREE.InstancedMesh): void {
@@ -654,6 +927,31 @@ export class CombatEffects {
     mesh.count = count;
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }
+
+  private updateBurnMarks(now: number): void {
+    let count = 0;
+    for (const slot of this.burnMarks) {
+      if (!slot.active) continue;
+      const progress = (now - slot.bornAt) / slot.lifetime;
+      if (progress >= 1) {
+        slot.active = false;
+        continue;
+      }
+      const appear = THREE.MathUtils.smoothstep(progress, 0, 0.035);
+      const release = 1 - THREE.MathUtils.smoothstep(progress, 0.88, 1);
+      const size = slot.scale * appear * (0.78 + release * 0.22);
+      this.position.set(slot.x, slot.y, slot.z);
+      this.quaternion.setFromAxisAngle(UP, slot.rotation).multiply(this.horizontalRing);
+      this.scale.set(size, size, size);
+      this.matrix.compose(this.position, this.quaternion, this.scale);
+      this.burnMarkMesh.setMatrixAt(count, this.matrix);
+      this.burnMarkMesh.setColorAt(count, this.color.setHex(slot.color));
+      count += 1;
+    }
+    this.burnMarkMesh.count = count;
+    this.burnMarkMesh.instanceMatrix.needsUpdate = true;
+    if (this.burnMarkMesh.instanceColor) this.burnMarkMesh.instanceColor.needsUpdate = true;
   }
 
   private updateLightning(now: number): void {

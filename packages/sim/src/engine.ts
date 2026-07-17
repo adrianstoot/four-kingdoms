@@ -46,6 +46,14 @@ const SPATIAL_CELL_SIZE = 8;
 const BOT_DECISION_INTERVAL = 24;
 const BOT_DEFENSE_RADIUS = 31;
 const BOT_URGENT_THREAT_SCORE = 145;
+const HIT_RECOVERY_TICKS = 4;
+const TARGET_LOCK_RANGE_MULTIPLIER = 1.45;
+const BODY_CLEARANCE = 0.1;
+const GIANT_BLOCKER_MARGIN = 0.55;
+const KNIGHT_CHARGE_MIN_TICKS = 20;
+const KNIGHT_CHARGE_DAMAGE_BPS = 16_000;
+const ARROW_SPEED_METERS_PER_SECOND = 24;
+const MIN_ARROW_FLIGHT_TICKS = 3;
 const archetypeCodes: Record<ArchetypeId, ArchetypeCode> = {
   guard: ArchetypeCode.Guard,
   archer: ArchetypeCode.Archer,
@@ -100,9 +108,41 @@ interface PendingSpell {
   destination: Vec2;
   impactTick: number;
 }
+interface PendingProjectile {
+  projectileId: number;
+  sourceId: number;
+  targetType: 'entity' | 'castle';
+  targetId: number;
+  origin: Vec2;
+  destination: Vec2;
+  damage: number;
+  impactTick: number;
+}
+
+interface EntityHitIntent {
+  sourceId: number;
+  targetId: number;
+  damage: number;
+}
+
+interface CastleHitIntent {
+  sourceId: number;
+  targetId: PlayerId;
+  damage: number;
+}
+
 
 
 type CombatDefinition = UnitDefinition | BuildingDefinition;
+
+interface CombatApproach {
+  worldDistance: number;
+  effectiveRange: number;
+  routeDistance: number;
+  lateralDistance: number;
+  ahead: boolean;
+  reachable: boolean;
+}
 
 interface BotThreatSummary {
   castle: CastleState | null;
@@ -144,6 +184,10 @@ class Random {
   integer(maximum: number): number {
     return Math.floor(this.next() * Math.max(1, maximum));
   }
+
+  snapshotState(): number {
+    return this.state >>> 0;
+  }
 }
 
 class EntityStore {
@@ -166,6 +210,7 @@ class EntityStore {
   readonly routeDistance: Float32Array;
   readonly laneOffset: Float32Array;
   readonly attackCooldown: Int16Array;
+  readonly chargeTicks: Uint16Array;
   readonly lifetime: Int32Array;
   readonly cardCost: Uint8Array;
   private readonly idToIndex = new Map<number, number>();
@@ -192,6 +237,7 @@ class EntityStore {
     this.routeDistance = new Float32Array(capacity);
     this.laneOffset = new Float32Array(capacity);
     this.attackCooldown = new Int16Array(capacity);
+    this.chargeTicks = new Uint16Array(capacity);
     this.lifetime = new Int32Array(capacity);
     this.cardCost = new Uint8Array(capacity);
     this.routeIndex.fill(-1);
@@ -236,6 +282,7 @@ class EntityStore {
     this.routeDistance[index] = values.routeDistance;
     this.laneOffset[index] = values.laneOffset;
     this.attackCooldown[index] = 0;
+    this.chargeTicks[index] = 0;
     this.lifetime[index] = values.lifetime ?? -1;
     this.cardCost[index] = values.cardCost;
     this.idToIndex.set(id, index);
@@ -247,12 +294,17 @@ class EntityStore {
     return this.idToIndex.get(id) ?? -1;
   }
 
+  nextEntityId(): number {
+    return this.nextId;
+  }
+
   remove(index: number): void {
     if (index < 0 || this.active[index] === 0) return;
     this.idToIndex.delete(this.id[index]!);
     this.active[index] = 0;
     this.targetId[index] = -1;
     this.routeIndex[index] = -1;
+    this.chargeTicks[index] = 0;
     this.count -= 1;
   }
 }
@@ -277,7 +329,9 @@ export class GameSimulation {
   private bots = new Set<PlayerId>();
   private events: SimEvent[] = [];
   private pendingSpells: PendingSpell[] = [];
+  private pendingProjectiles: PendingProjectile[] = [];
   private nextCastId = 1;
+  private nextProjectileId = 1;
   private paused = false;
   private tick = 0;
   private phase: 'playing' | 'finished' = 'playing';
@@ -386,6 +440,7 @@ export class GameSimulation {
     this.updateBots();
     this.executeCommands();
     this.resolvePendingSpells();
+    this.resolvePendingProjectiles();
     this.updateEntities();
     this.updateCenter();
     this.updateAttrition();
@@ -976,6 +1031,8 @@ export class GameSimulation {
 
   private updateEntities(): void {
     const spatial = this.buildSpatialHash();
+    const entityHitIntents: EntityHitIntent[] = [];
+    const castleHitIntents: CastleHitIntent[] = [];
     for (let index = 0; index < this.entities.capacity; index += 1) {
       if (this.entities.active[index] === 0) continue;
       this.entities.stateTick[index] = Math.min(65_535, this.entities.stateTick[index]! + 1);
@@ -1003,53 +1060,73 @@ export class GameSimulation {
         if (this.entities.lifetime[index] === 0) { this.killEntity(index); continue; }
       }
 
+      if (this.entities.state[index] === EntityStateCode.Hit && this.entities.stateTick[index]! <= HIT_RECOVERY_TICKS) {
+        this.updateMotionPhase(index, HIT_RECOVERY_TICKS);
+        continue;
+      }
+
       const owner = this.entities.owner[index] as PlayerId;
       const target = this.findCombatTarget(index, definition, spatial);
       if (target >= 0) {
         const dx = this.entities.x[target]! - this.entities.x[index]!;
         const dz = this.entities.z[target]! - this.entities.z[index]!;
         const distance = Math.hypot(dx, dz);
-        const targetRadius = this.definitionAt(target).physicalRadius;
+        const targetDefinition = this.definitionAt(target);
+        const approach = this.combatApproach(index, target, definition);
         const targetId = this.entities.id[target]!;
         if (this.entities.targetId[index] !== targetId && this.entities.state[index] === EntityStateCode.Attack) {
           this.setEntityState(index, EntityStateCode.Idle);
         }
         this.entities.targetId[index] = targetId;
-        if (distance <= definition.attackRange + targetRadius) {
+        if (distance <= approach.effectiveRange + 1e-6) {
           this.setEntityState(index, EntityStateCode.Attack);
           this.entities.yaw[index] = Math.atan2(dx, dz);
           if (
             this.entities.attackCooldown[index]! <= 0
             && this.entities.stateTick[index]! >= definition.attackAnticipationTicks
           ) {
-            this.damageEntity(target, definition.damage, this.entities.id[index]!);
+            const damage = this.attackDamage(index, target, definition);
+            if (this.entities.archetype[index] === ArchetypeCode.Archer) {
+              this.launchProjectile(index, 'entity', targetId, damage, {
+                x: this.entities.x[target]!,
+                z: this.entities.z[target]!,
+              });
+            } else {
+              entityHitIntents.push({
+                sourceId: this.entities.id[index]!,
+                targetId,
+                damage,
+              });
+            }
             this.entities.attackCooldown[index] = definition.attackCooldownTicks;
             this.entities.stateTick[index] = 0;
           }
           continue;
         }
-        if (definition.kind === 'unit') {
+        if (definition.kind === 'unit' && approach.reachable && approach.ahead) {
           const route = this.routePaths[this.entities.routeIndex[index]!];
           if (route) {
             const currentDistance = this.entities.routeDistance[index]!;
-            const pursuit = nearestOnRoutePath(
-              route,
-              { x: this.entities.x[target]!, z: this.entities.z[target]! },
-              currentDistance,
-              Math.min(route.length, currentDistance + definition.aggroRange + 3),
-            );
-            if (
-              pursuit.routeDistance > currentDistance + 0.001
-              && pursuit.lateralDistance <= definition.attackRange + targetRadius
-            ) {
+            const preferredDistance = this.preferredCombatDistance(definition, targetDefinition);
+            const longitudinalClearance = Math.sqrt(Math.max(
+              0,
+              preferredDistance * preferredDistance - approach.lateralDistance * approach.lateralDistance,
+            ));
+            const stopDistance = Math.max(currentDistance, approach.routeDistance - longitudinalClearance);
+            if (stopDistance > currentDistance + 0.001) {
               this.setEntityState(index, EntityStateCode.Walk);
               this.advanceUnitOnRoute(
                 index,
-                Math.min(pursuit.routeDistance, currentDistance + definition.moveSpeed / TICK_RATE),
+                Math.min(stopDistance, currentDistance + definition.moveSpeed / TICK_RATE),
                 spatial,
               );
               continue;
             }
+            // A crossing opponent can be laterally outside melee range for a
+            // few ticks. Hold the exact centerline interception point instead
+            // of walking through it or stepping onto the grass.
+            this.setEntityState(index, EntityStateCode.Idle);
+            continue;
           }
         }
         this.entities.targetId[index] = -1;
@@ -1082,11 +1159,18 @@ export class GameSimulation {
             && this.entities.stateTick[index]! >= definition.attackAnticipationTicks
           ) {
             const multiplier = this.tick >= CONTENT.balance.doubleElixirTick ? 1.5 : 1;
-            const damage = Math.round(definition.damage * multiplier);
-            castle.hp = Math.max(0, castle.hp - damage);
+            const damage = Math.round(this.attackDamage(index, -1, definition) * multiplier);
+            if (this.entities.archetype[index] === ArchetypeCode.Archer) {
+              this.launchProjectile(index, 'castle', castle.playerId, damage, { x: castle.x, z: castle.z });
+            } else {
+              castleHitIntents.push({
+                sourceId: this.entities.id[index]!,
+                targetId: castle.playerId,
+                damage,
+              });
+            }
             this.entities.attackCooldown[index] = definition.attackCooldownTicks;
             this.entities.stateTick[index] = 0;
-            this.events.push({ type: 'damage', tick: this.tick, sourceId: this.entities.id[index]!, targetType: 'castle', targetId: castle.playerId, amount: damage });
           }
         } else {
           this.retargetAtNode(index, route.destinationPlayerId);
@@ -1097,8 +1181,132 @@ export class GameSimulation {
       this.setEntityState(index, EntityStateCode.Walk);
       this.advanceUnitOnRoute(index, Math.min(route.length, currentDistance + definition.moveSpeed / TICK_RATE), spatial);
     }
+    this.resolvePreparedHits(entityHitIntents, castleHitIntents);
   }
 
+  /**
+   * Non-projectile attacks are prepared from one immutable combat frame and
+   * committed only after every entity has made its decision. This lets two
+   * ready combatants exchange lethal blows on the same tick regardless of
+   * their pool slot or spawn order.
+   */
+  private resolvePreparedHits(
+    entityIntents: EntityHitIntent[],
+    castleIntents: CastleHitIntent[],
+  ): void {
+    const livingAtCommitStart = new Set<number>();
+    for (let index = 0; index < this.entities.capacity; index += 1) {
+      if (this.entities.active[index] && this.entities.state[index] !== EntityStateCode.Death) {
+        livingAtCommitStart.add(this.entities.id[index]!);
+      }
+    }
+
+    const validEntityIntents = entityIntents
+      .filter((intent) => livingAtCommitStart.has(intent.targetId))
+      .sort((left, right) => left.targetId - right.targetId || left.sourceId - right.sourceId);
+    for (let cursor = 0; cursor < validEntityIntents.length;) {
+      const targetId = validEntityIntents[cursor]!.targetId;
+      let end = cursor + 1;
+      while (end < validEntityIntents.length && validEntityIntents[end]!.targetId === targetId) end += 1;
+      const target = this.entities.indexForId(targetId);
+      if (target >= 0 && livingAtCommitStart.has(targetId)) {
+        let totalDamage = 0;
+        for (let intentIndex = cursor; intentIndex < end; intentIndex += 1) {
+          const intent = validEntityIntents[intentIndex]!;
+          totalDamage += intent.damage;
+          this.events.push({
+            type: 'damage',
+            tick: this.tick,
+            sourceId: intent.sourceId,
+            targetType: 'entity',
+            targetId,
+            amount: intent.damage,
+          });
+          this.consumeChargeOnImpact(intent.sourceId);
+        }
+        this.entities.hp[target] = Math.max(0, this.entities.hp[target]! - totalDamage);
+        if (this.entities.hp[target] === 0) {
+          this.killEntity(target);
+        } else {
+          this.setEntityState(target, EntityStateCode.Hit);
+          this.retargetAfterPreparedDamage(
+            target,
+            validEntityIntents.slice(cursor, end).map((intent) => intent.sourceId),
+          );
+        }
+      }
+      cursor = end;
+    }
+
+    const validCastleIntents = castleIntents
+      .filter((intent) => {
+        const castle = this.castles[intent.targetId];
+        return castle?.alive === true && castle.hp > 0;
+      })
+      .sort((left, right) => left.targetId - right.targetId || left.sourceId - right.sourceId);
+    for (let cursor = 0; cursor < validCastleIntents.length;) {
+      const targetId = validCastleIntents[cursor]!.targetId;
+      let end = cursor + 1;
+      while (end < validCastleIntents.length && validCastleIntents[end]!.targetId === targetId) end += 1;
+      const castle = this.castles[targetId];
+      if (castle?.alive && castle.hp > 0) {
+        let totalDamage = 0;
+        for (let intentIndex = cursor; intentIndex < end; intentIndex += 1) {
+          const intent = validCastleIntents[intentIndex]!;
+          totalDamage += intent.damage;
+          this.events.push({
+            type: 'damage',
+            tick: this.tick,
+            sourceId: intent.sourceId,
+            targetType: 'castle',
+            targetId,
+            amount: intent.damage,
+          });
+          this.consumeChargeOnImpact(intent.sourceId);
+        }
+        castle.hp = Math.max(0, castle.hp - totalDamage);
+      }
+      cursor = end;
+    }
+  }
+
+  private consumeChargeOnImpact(sourceId: number): void {
+    const source = this.entities.indexForId(sourceId);
+    if (source >= 0 && this.entities.archetype[source] === ArchetypeCode.Knight) {
+      this.entities.chargeTicks[source] = 0;
+    }
+  }
+
+  private retargetAfterPreparedDamage(index: number, sourceIds: number[]): void {
+    const candidates = sourceIds
+      .map((sourceId) => this.entities.indexForId(sourceId))
+      .filter((source) => source >= 0 && this.isEnemyPlayer(
+        this.entities.owner[index] as PlayerId,
+        this.entities.owner[source] as PlayerId,
+      ))
+      .sort((left, right) => {
+        const leftDistance = (this.entities.x[left]! - this.entities.x[index]!) ** 2
+          + (this.entities.z[left]! - this.entities.z[index]!) ** 2;
+        const rightDistance = (this.entities.x[right]! - this.entities.x[index]!) ** 2
+          + (this.entities.z[right]! - this.entities.z[index]!) ** 2;
+        return leftDistance - rightDistance
+          || this.entities.owner[left]! - this.entities.owner[right]!
+          || this.entities.archetype[left]! - this.entities.archetype[right]!
+          || this.entities.routeIndex[left]! - this.entities.routeIndex[right]!
+          || this.entities.routeDistance[left]! - this.entities.routeDistance[right]!
+          || this.entities.id[left]! - this.entities.id[right]!;
+      });
+    const source = candidates[0];
+    if (source === undefined) return;
+    const current = this.entities.indexForId(this.entities.targetId[index]!);
+    const definition = this.definitionAt(index);
+    const currentIsPriorityBuilding = current >= 0
+      && this.entities.kind[current] === EntityKindCode.Building
+      && this.entities.state[current] !== EntityStateCode.Death;
+    if (definition.targetPriority !== 'buildings' || !currentIsPriorityBuilding) {
+      this.entities.targetId[index] = this.entities.id[source]!;
+    }
+  }
   private updateMotionPhase(index: number, cycleTicks: number): void {
     const cycle = Math.max(1, cycleTicks);
     this.entities.motionPhase[index] = Math.round((this.entities.stateTick[index]! % cycle) / cycle * 65_535);
@@ -1117,15 +1325,31 @@ export class GameSimulation {
         candidate === index
         || this.entities.kind[candidate] !== EntityKindCode.Unit
         || this.entities.state[candidate] === EntityStateCode.Death
-        || this.entities.routeIndex[candidate] !== routeIndex
-        || teamForPlayer(this.entities.owner[candidate] as PlayerId) !== teamForPlayer(this.entities.owner[index] as PlayerId)
       ) continue;
-      const candidateDistance = this.entities.routeDistance[candidate]!;
-      const candidateIsAhead = candidateDistance > currentDistance + 0.001
-        || (Math.abs(candidateDistance - currentDistance) <= 0.001 && this.entities.id[candidate]! < this.entities.id[index]!);
-      if (!candidateIsAhead) continue;
-      const gap = definition.physicalRadius + this.definitionAt(candidate).physicalRadius + 0.12;
-      nextDistance = Math.min(nextDistance, candidateDistance - gap);
+      const sameTeam = teamForPlayer(this.entities.owner[candidate] as PlayerId)
+        === teamForPlayer(this.entities.owner[index] as PlayerId);
+      const gap = definition.physicalRadius + this.definitionAt(candidate).physicalRadius + BODY_CLEARANCE;
+      if (sameTeam) {
+        if (this.entities.routeIndex[candidate] !== routeIndex) continue;
+        const candidateDistance = this.entities.routeDistance[candidate]!;
+        const candidateIsAhead = candidateDistance > currentDistance + 0.001
+          || (Math.abs(candidateDistance - currentDistance) <= 0.001 && this.entities.id[candidate]! < this.entities.id[index]!);
+        if (candidateIsAhead) nextDistance = Math.min(nextDistance, candidateDistance - gap);
+        continue;
+      }
+
+      // Opponents using reverse or crossing routes do not share routeIndex.
+      // Project them onto this unit's own centerline and reserve enough
+      // longitudinal room that their physical bodies can never pass through.
+      const crossing = nearestOnRoutePath(
+        route,
+        { x: this.entities.x[candidate]!, z: this.entities.z[candidate]! },
+        currentDistance,
+        Math.min(route.length, currentDistance + 4.5),
+      );
+      if (crossing.routeDistance <= currentDistance + 0.001 || crossing.lateralDistance >= gap) continue;
+      const clearance = Math.sqrt(Math.max(0, gap * gap - crossing.lateralDistance * crossing.lateralDistance));
+      nextDistance = Math.min(nextDistance, crossing.routeDistance - clearance);
     }
     nextDistance = Math.max(currentDistance, nextDistance);
     const travelled = nextDistance - currentDistance;
@@ -1136,6 +1360,9 @@ export class GameSimulation {
     this.entities.z[index] = sample.position.z;
     this.entities.yaw[index] = sample.yaw;
     if (travelled > 0) {
+      if (this.entities.archetype[index] === ArchetypeCode.Knight) {
+        this.entities.chargeTicks[index] = Math.min(65_535, this.entities.chargeTicks[index]! + 1);
+      }
       const stride = Math.max(0.45, definition.height * 0.55);
       const phaseDelta = Math.round(travelled / stride * 65_535);
       this.entities.motionPhase[index] = (this.entities.motionPhase[index]! + phaseDelta) & 0xffff;
@@ -1258,21 +1485,82 @@ export class GameSimulation {
     return result;
   }
 
+  private combatApproach(index: number, candidate: number, definition: CombatDefinition): CombatApproach {
+    const dx = this.entities.x[candidate]! - this.entities.x[index]!;
+    const dz = this.entities.z[candidate]! - this.entities.z[index]!;
+    const worldDistance = Math.hypot(dx, dz);
+    const targetDefinition = this.definitionAt(candidate);
+    const effectiveRange = definition.attackRange + targetDefinition.physicalRadius;
+    if (definition.kind === 'building') {
+      return {
+        worldDistance,
+        effectiveRange,
+        routeDistance: 0,
+        lateralDistance: 0,
+        ahead: true,
+        reachable: worldDistance <= definition.aggroRange * TARGET_LOCK_RANGE_MULTIPLIER,
+      };
+    }
+
+    const route = this.routePaths[this.entities.routeIndex[index]!];
+    if (!route) {
+      return { worldDistance, effectiveRange, routeDistance: 0, lateralDistance: worldDistance, ahead: false, reachable: false };
+    }
+    const currentDistance = this.entities.routeDistance[index]!;
+    const projection = nearestOnRoutePath(
+      route,
+      { x: this.entities.x[candidate]!, z: this.entities.z[candidate]! },
+      Math.max(0, currentDistance - effectiveRange),
+      Math.min(route.length, currentDistance + definition.aggroRange + effectiveRange),
+    );
+    const ahead = projection.routeDistance >= currentDistance - 0.04;
+    // A target is lane-reachable only if some point on this exact centerline
+    // can enter real attack range. A visual corridor margin here creates a
+    // permanent stop just outside range at perpendicular crossings.
+    const reachable = worldDistance <= effectiveRange + 1e-6
+      || (ahead && projection.lateralDistance <= effectiveRange + 1e-6);
+    return {
+      worldDistance,
+      effectiveRange,
+      routeDistance: projection.routeDistance,
+      lateralDistance: projection.lateralDistance,
+      ahead,
+      reachable,
+    };
+  }
+
+  private canAcquireTarget(index: number, candidate: number, definition: CombatDefinition): boolean {
+    const approach = this.combatApproach(index, candidate, definition);
+    if (!approach.reachable) return false;
+    if (definition.targetPriority !== 'buildings' || this.entities.kind[candidate] === EntityKindCode.Building) return true;
+
+    // Giants stay focused on structures. They only stop for infantry that is
+    // physically blocking the centerline or actively attacking them.
+    return approach.worldDistance <= approach.effectiveRange + GIANT_BLOCKER_MARGIN
+      || this.entities.targetId[candidate] === this.entities.id[index]
+      || this.entities.targetId[index] === this.entities.id[candidate];
+  }
+
   private findCombatTarget(index: number, definition: CombatDefinition, spatial: Map<string, number[]>): number {
     const owner = this.entities.owner[index] as PlayerId;
     const x = this.entities.x[index]!;
     const z = this.entities.z[index]!;
     const locked = this.entities.indexForId(this.entities.targetId[index]!);
-    const lockRange = definition.aggroRange * 1.45;
+    const lockRange = definition.aggroRange * TARGET_LOCK_RANGE_MULTIPLIER;
     const lockIsValid = locked >= 0
       && this.isLivingEnemy(locked, owner)
-      && (this.entities.x[locked]! - x) ** 2 + (this.entities.z[locked]! - z) ** 2 <= lockRange * lockRange;
+      && (this.entities.x[locked]! - x) ** 2 + (this.entities.z[locked]! - z) ** 2 <= lockRange * lockRange
+      && this.canAcquireTarget(index, locked, definition);
 
     let best = -1;
     let bestScore = Number.POSITIVE_INFINITY;
     let bestId = Number.POSITIVE_INFINITY;
     for (const candidate of this.indicesNear(x, z, definition.aggroRange, spatial)) {
-      if (candidate === index || !this.isLivingEnemy(candidate, owner)) continue;
+      if (
+        candidate === index
+        || !this.isLivingEnemy(candidate, owner)
+        || !this.canAcquireTarget(index, candidate, definition)
+      ) continue;
       const score = this.combatTargetScore(index, candidate, definition);
       const id = this.entities.id[candidate]!;
       if (score < bestScore || (score === bestScore && id < bestId)) {
@@ -1282,37 +1570,223 @@ export class GameSimulation {
       }
     }
 
-    if (!lockIsValid) return best;
-    if (
-      definition.targetPriority === 'buildings'
-      && best >= 0
-      && this.entities.kind[best] === EntityKindCode.Building
-      && this.entities.kind[locked] !== EntityKindCode.Building
-    ) return best;
-    return locked;
+    let selected = best;
+    if (lockIsValid) {
+      selected = locked;
+      if (
+        definition.targetPriority === 'buildings'
+        && best >= 0
+        && this.entities.kind[best] === EntityKindCode.Building
+        && this.entities.kind[locked] !== EntityKindCode.Building
+      ) selected = best;
+    }
+    if (selected < 0) return -1;
+
+    // Target locks are never allowed to pull a unit through another enemy's
+    // body. Retarget the first physical obstruction along the attacker's own
+    // route, then resume the original tactical target once it is cleared.
+    const blocker = this.findFirstLongitudinalBlocker(index, selected, definition, spatial);
+    return blocker >= 0 ? blocker : selected;
   }
 
+  private findFirstLongitudinalBlocker(
+    index: number,
+    selected: number,
+    definition: CombatDefinition,
+    spatial: Map<string, number[]>,
+  ): number {
+    if (definition.kind !== 'unit') return -1;
+    const selectedApproach = this.combatApproach(index, selected, definition);
+    if (selectedApproach.worldDistance <= selectedApproach.effectiveRange + 1e-6) return -1;
+    if (!selectedApproach.ahead) return -1;
+    const currentDistance = this.entities.routeDistance[index]!;
+    const owner = this.entities.owner[index] as PlayerId;
+    let blocker = -1;
+    let blockerRouteDistance = Number.POSITIVE_INFINITY;
+    let blockerLateralDistance = Number.POSITIVE_INFINITY;
+    let blockerId = Number.POSITIVE_INFINITY;
+    for (const candidate of this.indicesNear(
+      this.entities.x[index]!,
+      this.entities.z[index]!,
+      definition.aggroRange,
+      spatial,
+    )) {
+      if (
+        candidate === index
+        || candidate === selected
+        || !this.isLivingEnemy(candidate, owner)
+        || this.entities.kind[candidate] !== EntityKindCode.Unit
+      ) continue;
+      const approach = this.combatApproach(index, candidate, definition);
+      const physicalCorridor = definition.physicalRadius
+        + this.definitionAt(candidate).physicalRadius
+        + BODY_CLEARANCE;
+      if (
+        !approach.ahead
+        || approach.routeDistance <= currentDistance + 0.001
+        || approach.routeDistance >= selectedApproach.routeDistance - 0.001
+        || approach.lateralDistance >= physicalCorridor
+      ) continue;
+      const id = this.entities.id[candidate]!;
+      if (
+        approach.routeDistance < blockerRouteDistance
+        || (approach.routeDistance === blockerRouteDistance && approach.lateralDistance < blockerLateralDistance)
+        || (
+          approach.routeDistance === blockerRouteDistance
+          && approach.lateralDistance === blockerLateralDistance
+          && id < blockerId
+        )
+      ) {
+        blocker = candidate;
+        blockerRouteDistance = approach.routeDistance;
+        blockerLateralDistance = approach.lateralDistance;
+        blockerId = id;
+      }
+    }
+    return blocker;
+  }
   private combatTargetScore(index: number, candidate: number, definition: CombatDefinition): number {
-    const dx = this.entities.x[candidate]! - this.entities.x[index]!;
-    const dz = this.entities.z[candidate]! - this.entities.z[index]!;
-    const distanceSquared = dx * dx + dz * dz;
+    const approach = this.combatApproach(index, candidate, definition);
+    const distanceSquared = approach.worldDistance * approach.worldDistance;
     const rangeSquared = definition.aggroRange * definition.aggroRange;
     let score = distanceSquared;
     if (definition.targetPriority === 'buildings') {
       score += this.entities.kind[candidate] === EntityKindCode.Building ? -rangeSquared * 4 : rangeSquared * 1.5;
     }
     if (this.entities.targetId[candidate] === this.entities.id[index]) score -= rangeSquared * 0.22;
+    score += approach.lateralDistance * approach.lateralDistance * 0.35;
     const healthRatio = this.entities.hp[candidate]! / Math.max(1, this.entities.maxHp[candidate]!);
     score += healthRatio * rangeSquared * 0.12;
     if (this.entities.archetype[candidate] === ArchetypeCode.Commander) score -= rangeSquared * 0.18;
     return score;
   }
 
+  private preferredCombatDistance(definition: UnitDefinition, targetDefinition: CombatDefinition): number {
+    const effectiveRange = definition.attackRange + targetDefinition.physicalRadius;
+    if (definition.id === 'archer') return effectiveRange * 0.82;
+    return Math.max(
+      definition.physicalRadius + targetDefinition.physicalRadius + BODY_CLEARANCE,
+      effectiveRange * 0.74,
+    );
+  }
+
+  private attackDamage(index: number, target: number, definition: CombatDefinition): number {
+    if (
+      this.entities.archetype[index] === ArchetypeCode.Knight
+      && this.entities.chargeTicks[index]! >= KNIGHT_CHARGE_MIN_TICKS
+      && (target < 0 || this.entities.kind[target] === EntityKindCode.Unit || this.entities.kind[target] === EntityKindCode.Building)
+    ) {
+      return Math.round(definition.damage * KNIGHT_CHARGE_DAMAGE_BPS / 10_000);
+    }
+    return definition.damage;
+  }
+
+  private launchProjectile(
+    sourceIndex: number,
+    targetType: 'entity' | 'castle',
+    targetId: number,
+    damage: number,
+    destination: Vec2,
+  ): void {
+    const origin = { x: this.entities.x[sourceIndex]!, z: this.entities.z[sourceIndex]! };
+    const distance = Math.hypot(destination.x - origin.x, destination.z - origin.z);
+    const flightTicks = Math.max(
+      MIN_ARROW_FLIGHT_TICKS,
+      Math.ceil(distance / ARROW_SPEED_METERS_PER_SECOND * TICK_RATE),
+    );
+    const pending: PendingProjectile = {
+      projectileId: this.nextProjectileId++,
+      sourceId: this.entities.id[sourceIndex]!,
+      targetType,
+      targetId,
+      origin,
+      destination: { ...destination },
+      damage,
+      impactTick: this.tick + flightTicks,
+    };
+    this.pendingProjectiles.push(pending);
+    this.events.push({
+      type: 'projectile-cast',
+      tick: this.tick,
+      projectileId: pending.projectileId,
+      sourceId: pending.sourceId,
+      targetType: pending.targetType,
+      targetId: pending.targetId,
+      origin: pending.origin,
+      destination: pending.destination,
+      impactTick: pending.impactTick,
+    });
+  }
+
+  private resolvePendingProjectiles(): void {
+    const due = this.pendingProjectiles
+      .filter((pending) => pending.impactTick <= this.tick)
+      .sort((left, right) => left.impactTick - right.impactTick || left.projectileId - right.projectileId);
+    if (due.length === 0) return;
+    const dueIds = new Set(due.map((pending) => pending.projectileId));
+    this.pendingProjectiles = this.pendingProjectiles.filter((pending) => !dueIds.has(pending.projectileId));
+    for (const pending of due) {
+      let hit = false;
+      let destination = pending.destination;
+      if (pending.targetType === 'entity') {
+        const target = this.entities.indexForId(pending.targetId);
+        if (target >= 0) {
+          destination = { x: this.entities.x[target]!, z: this.entities.z[target]! };
+          if (this.entities.state[target] !== EntityStateCode.Death) {
+            this.damageEntity(target, pending.damage, pending.sourceId);
+            hit = true;
+          }
+        }
+      } else {
+        const castle = this.castles[pending.targetId];
+        if (castle) destination = { x: castle.x, z: castle.z };
+        if (castle?.alive && castle.hp > 0) {
+          castle.hp = Math.max(0, castle.hp - pending.damage);
+          this.events.push({
+            type: 'damage',
+            tick: this.tick,
+            sourceId: pending.sourceId,
+            targetType: 'castle',
+            targetId: castle.playerId,
+            amount: pending.damage,
+          });
+          hit = true;
+        }
+      }
+      this.events.push({
+        type: 'projectile-impact',
+        tick: this.tick,
+        projectileId: pending.projectileId,
+        sourceId: pending.sourceId,
+        targetType: pending.targetType,
+        targetId: pending.targetId,
+        origin: pending.origin,
+        destination,
+        impactTick: pending.impactTick,
+        hit,
+      });
+    }
+  }
   private damageEntity(index: number, amount: number, sourceId: number): void {
     if (this.entities.active[index] === 0 || this.entities.state[index] === EntityStateCode.Death) return;
     this.entities.hp[index] = Math.max(0, this.entities.hp[index]! - amount);
     this.events.push({ type: 'damage', tick: this.tick, sourceId, targetType: 'entity', targetId: this.entities.id[index]!, amount });
-    if (this.entities.hp[index] === 0) this.killEntity(index); else this.setEntityState(index, EntityStateCode.Hit);
+    if (this.entities.hp[index] === 0) {
+      this.killEntity(index);
+      return;
+    }
+
+    this.setEntityState(index, EntityStateCode.Hit);
+    const source = sourceId > 0 ? this.entities.indexForId(sourceId) : -1;
+    if (source < 0 || !this.isLivingEnemy(source, this.entities.owner[index] as PlayerId)) return;
+    const current = this.entities.indexForId(this.entities.targetId[index]!);
+    const definition = this.definitionAt(index);
+    const currentIsPriorityBuilding = current >= 0
+      && this.isLivingEnemy(current, this.entities.owner[index] as PlayerId)
+      && this.entities.kind[current] === EntityKindCode.Building;
+    if (definition.targetPriority !== 'buildings' || !currentIsPriorityBuilding) {
+      this.entities.targetId[index] = sourceId;
+    }
   }
 
   private killEntity(index: number): void {
@@ -1332,6 +1806,13 @@ export class GameSimulation {
     this.entities.state[index] = state;
     this.entities.stateTick[index] = 0;
     this.entities.motionPhase[index] = 0;
+    // Tactical pauses and target switches preserve a mounted knight's built-up
+    // momentum. Charge is consumed by a real impact and reset only across the
+    // lifecycle boundaries that invalidate it.
+    if (
+      state === EntityStateCode.Death
+      || state === EntityStateCode.Spawn
+    ) this.entities.chargeTicks[index] = 0;
   }
 
   private isEnemyPlayer(left: PlayerId, right: PlayerId): boolean {
@@ -1353,6 +1834,29 @@ export class GameSimulation {
       if (this.entities.active[index] && this.entities.owner[index] === playerId && this.entities.archetype[index] === ArchetypeCode.Commander && this.entities.state[index] !== EntityStateCode.Death) return true;
     }
     return false;
+  }
+
+  /** Places one exact archetype on a route for deterministic combat regression tests. */
+  spawnDebugCombatant(routeId: string, archetypeId: ArchetypeId, routeDistance: number): number {
+    const routeIndex = this.routeById.get(routeId) ?? -1;
+    const route = this.routePaths[routeIndex];
+    const definition = ARCHETYPES_BY_ID[archetypeId];
+    if (!route || !definition || definition.kind !== 'unit' || this.entities.count >= this.maxEntities) return -1;
+    const distance = Math.max(0, Math.min(route.length, routeDistance));
+    const sample = sampleRoutePath(route, distance);
+    return this.entities.spawn({
+      kind: EntityKindCode.Unit,
+      archetype: archetypeCodes[archetypeId],
+      owner: route.playerId,
+      x: sample.position.x,
+      z: sample.position.z,
+      yaw: sample.yaw,
+      hp: definition.maxHp,
+      routeIndex,
+      routeDistance: distance,
+      laneOffset: 0,
+      cardCost: 0,
+    });
   }
 
   /** Deterministic route harness used by movement regression and performance tests. */
@@ -1469,26 +1973,129 @@ export class GameSimulation {
   private hashSnapshot(snapshot: GameSnapshot): number {
     let hash = 0x811c9dc5;
     const add = (value: number) => { hash ^= value | 0; hash = Math.imul(hash, 0x01000193); };
+    const floatBuffer = new ArrayBuffer(8);
+    const floatView = new DataView(floatBuffer);
+    const addFloat = (value: number) => {
+      floatView.setFloat64(0, value, true);
+      add(floatView.getUint32(0, true));
+      add(floatView.getUint32(4, true));
+    };
+    const addString = (value: string) => {
+      add(value.length);
+      for (let index = 0; index < value.length; index += 1) add(value.charCodeAt(index));
+    };
+
+    add(this.maxEntities);
     add(snapshot.tick);
-    for (const castle of snapshot.castles) add(castle.hp);
-    for (const player of snapshot.players) add(player.elixirMilli);
-    for (let index = 0; index < snapshot.entities.count; index += 1) {
-      add(snapshot.entities.id[index]!);
-      add(snapshot.entities.x[index]!);
-      add(snapshot.entities.z[index]!);
-      add(snapshot.entities.hp[index]!);
-      add(snapshot.entities.state[index]!);
-      add(snapshot.entities.stateTick[index]!);
-      add(snapshot.entities.motionPhase[index]!);
-    }
+    add(this.paused ? 1 : 0);
+    add(this.phase === 'playing' ? 1 : 2);
+    add(this.winnerPlayerId ?? -1);
+    add(this.draw ? 1 : 0);
+    add(this.random.snapshotState());
+    add(this.entities.nextEntityId());
     add(this.nextCastId);
+    add(this.nextProjectileId);
+
+    const orderedBots = [...this.bots].sort((left, right) => left - right);
+    add(orderedBots.length);
+    for (const bot of orderedBots) add(bot);
+
+    for (const player of this.players) {
+      add(player.id);
+      add(player.elixirMilli);
+      add(player.alive ? 1 : 0);
+      add(player.lastSequence);
+      for (const card of CONTENT.cards) {
+        addString(card.id);
+        add(player.cooldowns[card.id] ?? 0);
+      }
+    }
+    for (const castle of this.castles) {
+      add(castle.playerId);
+      addFloat(castle.x);
+      addFloat(castle.z);
+      add(castle.hp);
+      add(castle.maxHp);
+      add(castle.alive ? 1 : 0);
+    }
+    add(this.center.ownerPlayerId ?? -1);
+    add(this.center.capturingPlayerId ?? -1);
+    add(this.center.progressTicks);
+    for (const tactics of this.botTactics) {
+      add(tactics.commanderDeployed ? 1 : 0);
+      add(tactics.towerDeployed ? 1 : 0);
+      add(tactics.fireballCast ? 1 : 0);
+      add(tactics.chainLightningCast ? 1 : 0);
+      add(tactics.supportWaves);
+    }
+
+    // Pool-slot occupancy is future-determining because the first free slot is
+    // reused and entity updates run in slot order.
+    for (let index = 0; index < this.entities.capacity; index += 1) {
+      add(index);
+      add(this.entities.active[index]!);
+      if (this.entities.active[index] === 0) continue;
+      add(this.entities.id[index]!);
+      add(this.entities.kind[index]!);
+      add(this.entities.archetype[index]!);
+      add(this.entities.owner[index]!);
+      addFloat(this.entities.x[index]!);
+      addFloat(this.entities.z[index]!);
+      addFloat(this.entities.yaw[index]!);
+      add(this.entities.hp[index]!);
+      add(this.entities.maxHp[index]!);
+      add(this.entities.state[index]!);
+      add(this.entities.stateTick[index]!);
+      add(this.entities.motionPhase[index]!);
+      add(this.entities.targetId[index]!);
+      add(this.entities.routeIndex[index]!);
+      addFloat(this.entities.routeDistance[index]!);
+      addFloat(this.entities.laneOffset[index]!);
+      add(this.entities.attackCooldown[index]!);
+      add(this.entities.chargeTicks[index]!);
+      add(this.entities.lifetime[index]!);
+      add(this.entities.cardCost[index]!);
+    }
+
+    add(this.queued.length);
+    for (const queued of this.queued) {
+      const command = queued.command;
+      addString(command.type);
+      add(command.playerId);
+      addString(command.cardId);
+      add(command.sequence);
+      add(command.tick);
+      addFloat(command.position.x);
+      addFloat(command.position.z);
+      if (command.type === 'deploy') addString(command.routeId);
+      addFloat(queued.placement.x);
+      addFloat(queued.placement.z);
+      addFloat(queued.pathDistance);
+    }
+
+    add(this.pendingSpells.length);
     for (const pending of this.pendingSpells) {
       add(pending.castId);
       add(pending.playerId);
-      add(pending.cardId === 'fireball' ? 1 : 2);
+      addString(pending.cardId);
+      addFloat(pending.origin.x);
+      addFloat(pending.origin.z);
+      addFloat(pending.destination.x);
+      addFloat(pending.destination.z);
       add(pending.impactTick);
-      add(Math.round(pending.destination.x * POSITION_SCALE));
-      add(Math.round(pending.destination.z * POSITION_SCALE));
+    }
+    add(this.pendingProjectiles.length);
+    for (const pending of this.pendingProjectiles) {
+      add(pending.projectileId);
+      add(pending.sourceId);
+      addString(pending.targetType);
+      add(pending.targetId);
+      addFloat(pending.origin.x);
+      addFloat(pending.origin.z);
+      addFloat(pending.destination.x);
+      addFloat(pending.destination.z);
+      add(pending.damage);
+      add(pending.impactTick);
     }
     return hash >>> 0;
   }

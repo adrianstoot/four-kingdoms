@@ -29,6 +29,15 @@ import {
   type UnitPose,
   type VegetationBatch,
 } from "./procedural";
+import {
+  cloneFactionMaterials,
+  frameIndexForPhase,
+  loadExternalUnitLibrary,
+  unitMotion,
+  type ExternalUnitAsset,
+  type ExternalUnitLibrary,
+} from "./units/gltfUnitAssets";
+import { visualUnitPose } from "./units/visualUnitPose";
 import type { CameraPose, NormalizedSnapshot, NormalizedUnit, QualityPreset } from "./types";
 
 export type { QualityPreset } from "./types";
@@ -82,7 +91,8 @@ export interface WorldRendererCallbacks {
   onReady?: (backend: RendererBackend) => void;
   onResourcesReady?: () => void;
   onResourceProgress?: (progress: { progress: number; label?: string }) => void;
-  onFirstFrame?: () => void;
+  /** Published only after a snapshot from this session has been rendered. */
+  onFirstFrame?: (sessionId: number) => void;
   onCameraPoseChange?: (pose: CameraPose) => void;
   onCancelSelection?: () => void;
   onError?: (error: Error) => void;
@@ -101,7 +111,7 @@ interface UnitBatch {
   buildings: THREE.InstancedMesh;
 }
 
-type UnitVisualKey = `${UnitArchetype}:${UnitPose}`;
+type UnitVisualKey = string;
 
 interface PlacementPad {
   point: THREE.Vector3;
@@ -146,16 +156,11 @@ function lerpAngle(from: number, to: number, alpha: number): number {
 function unitVisualKey(archetype: UnitArchetype, pose: UnitPose): UnitVisualKey {
   return `${archetype}:${pose}`;
 }
-
-function visualUnitPose(state: string, id: number, timeSeconds: number): UnitPose {
-  if (state === "walk") {
-    return (Math.floor(timeSeconds * 6 + id * 0.73) & 1) === 0 ? "walkA" : "walkB";
-  }
-  if (state === "attack") return "attack";
-  if (state === "hit") return "hit";
-  if (state === "death") return "death";
-  return "idle";
+function externalUnitVisualKey(archetype: UnitArchetype, motion: string, frame: number): UnitVisualKey {
+  return `${archetype}:${motion}:${frame}`;
 }
+
+
 function isTextInput(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable;
@@ -197,6 +202,7 @@ export class WorldRenderer {
   private healthBackInstances: THREE.InstancedMesh | null = null;
   private healthFillInstances: THREE.InstancedMesh | null = null;
   private combatEffects: CombatEffects | null = null;
+  private externalUnitLibrary: ExternalUnitLibrary | null = null;
 
   private ghost: GhostVisual | null = null;
   private selectedCard: string | null = null;
@@ -244,7 +250,8 @@ export class WorldRenderer {
   private readonly cameraForward = new THREE.Vector3();
   private readonly zoomAnchor = new THREE.Vector3();
   private pointerInside = false;
-  private firstFramePublished = false;
+  private pendingFrameSessionId = 0;
+  private reportedFrameSessionId = 0;
   private lastPoseSignature = "";
 
   private lastFrameAt = 0;
@@ -263,8 +270,12 @@ export class WorldRenderer {
     if (this.initialized) return;
     if (this.disposed) throw new Error("Cannot initialize a disposed WorldRenderer.");
     this.callbacks.onResourceProgress?.({ progress: 0.08, label: "Preparando terreno" });
-    this.buildWorld();
-    this.callbacks.onResourceProgress?.({ progress: 0.42, label: "Construyendo los reinos" });
+    await this.buildWorld();
+    if (this.disposed) throw new Error("WorldRenderer was disposed while loading terrain resources.");
+    this.callbacks.onResourceProgress?.({ progress: 0.28, label: "Terreno ilustrado listo" });
+    await this.loadRiggedUnitAssets();
+    if (this.disposed) throw new Error("WorldRenderer was disposed while loading unit resources.");
+    this.callbacks.onResourceProgress?.({ progress: 0.55, label: "Construyendo los reinos" });
 
     const requestWebGPU = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("webgpu");
     const hasWebGPU = typeof navigator !== "undefined" && "gpu" in navigator && requestWebGPU;
@@ -288,15 +299,22 @@ export class WorldRenderer {
     this.bindEvents();
     this.resize();
     this.applyCamera(0);
+    this.callbacks.onResourceProgress?.({ progress: 0.92, label: "Compilando recursos graficos" });
+    await this.renderer.compileAsync(this.scene, this.camera);
+    if (this.disposed) throw new Error("WorldRenderer was disposed while compiling renderer resources.");
+    // Force creation of the TSL/post-processing pipeline before declaring the
+    // renderer resource set ready. The loading overlay still covers this warm-up.
+    this.renderPipeline.render();
     this.initialized = true;
+    await this.renderer.setAnimationLoop(this.onFrame);
+    if (this.disposed) throw new Error("WorldRenderer was disposed before its render loop became ready.");
     this.callbacks.onReady?.(this.backend);
     this.callbacks.onResourceProgress?.({ progress: 1, label: "Campo de batalla listo" });
     this.callbacks.onResourcesReady?.();
     this.emitCameraPose(true);
-    await this.renderer.setAnimationLoop(this.onFrame);
   }
 
-  setSnapshot(snapshot: GameSnapshot | null): void {
+  setSnapshot(snapshot: GameSnapshot | null, sessionId = 0): void {
     const receivedAt = performance.now();
     if (this.snapshotReceivedAt > 0) {
       this.interpolationDuration = THREE.MathUtils.clamp(receivedAt - this.snapshotReceivedAt, 35, 120);
@@ -309,6 +327,11 @@ export class WorldRenderer {
     this.combatEffects?.consume(snapshot?.events ?? [], current, previous, snapshot?.tick ?? 0);
     this.updateStrategicObjects();
     this.updateVegetationOcclusion();
+    if (!snapshot || sessionId <= 0) {
+      this.pendingFrameSessionId = 0;
+    } else if (sessionId !== this.reportedFrameSessionId) {
+      this.pendingFrameSessionId = sessionId;
+    }
   }
 
   setSelectedCard(card: string | null): void {
@@ -383,6 +406,8 @@ export class WorldRenderer {
     for (const material of materials) material.dispose();
     for (const geometry of geometries) geometry.dispose();
     this.scene.clear();
+    this.externalUnitLibrary?.dispose();
+    this.externalUnitLibrary = null;
   }
 
   private async createRenderer(forceWebGL: boolean): Promise<WebGPURenderer> {
@@ -401,10 +426,11 @@ export class WorldRenderer {
     return renderer;
   }
 
-  private buildWorld(): void {
+  private async buildWorld(): Promise<void> {
     if (this.worldBuilt) return;
+    const terrain = await createTerrain();
+    this.scene.add(terrain);
     this.worldBuilt = true;
-    this.scene.add(createTerrain());
     this.scene.add(createGroundDetails(this.lanes));
 
     const hemisphere = new THREE.HemisphereLight(0xd9e4c9, 0x263323, 1.25);
@@ -442,6 +468,73 @@ export class WorldRenderer {
     this.ghost = this.createGhost();
     this.scene.add(this.ghost.group);
     this.updateStrategicObjects();
+  }
+  private async loadRiggedUnitAssets(): Promise<void> {
+    const library = await loadExternalUnitLibrary({
+      onProgress: (progress, label) => {
+        this.callbacks.onResourceProgress?.({ progress: 0.1 + progress * 0.3, label });
+      },
+    });
+    if (this.disposed) {
+      library.dispose();
+      return;
+    }
+    this.externalUnitLibrary = library;
+    for (const asset of library.assets.values()) this.installExternalUnitAsset(asset);
+    for (const [archetype, error] of library.errors) {
+      console.warn(`Could not load the rigged ${archetype}; keeping its procedural fallback.`, error);
+    }
+  }
+
+  private installExternalUnitAsset(asset: ExternalUnitAsset): void {
+    for (let owner = 0; owner < this.unitBatches.length; owner += 1) {
+      const batch = this.unitBatches[owner];
+      if (!batch) continue;
+      const materials = cloneFactionMaterials(asset, owner);
+      for (const [motion, frames] of asset.frames) {
+        frames.forEach((frame, frameIndex) => {
+          const key = externalUnitVisualKey(asset.archetype, motion, frameIndex);
+          if (batch.units.has(key)) return;
+          const mesh = new THREE.InstancedMesh(frame.geometry, materials, MAX_RENDERED_UNITS);
+          mesh.name = `rigged-${owner}-${key}`;
+          mesh.count = 0;
+          mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+          mesh.castShadow = false;
+          mesh.receiveShadow = true;
+          mesh.frustumCulled = false;
+          const outline = new THREE.InstancedMesh(
+            frame.geometry,
+            new THREE.MeshBasicMaterial({ color: 0x171d18, side: THREE.BackSide }),
+            MAX_RENDERED_UNITS,
+          );
+          outline.name = `rigged-outline-${owner}-${key}`;
+          outline.count = 0;
+          outline.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+          outline.castShadow = false;
+          outline.receiveShadow = false;
+          outline.frustumCulled = false;
+          outline.renderOrder = -1;
+          batch.units.set(key, mesh);
+          batch.outlines.set(key, outline);
+          this.scene.add(outline, mesh);
+        });
+      }
+    }
+  }
+
+  private riggedUnitVisualKey(
+    asset: ExternalUnitAsset,
+    unit: NormalizedUnit,
+    timeSeconds: number,
+  ): UnitVisualKey {
+    const motion = unitMotion(unit.state);
+    const frames = asset.frames.get(motion) ?? asset.frames.get("idle") ?? [];
+    let phase = unit.motionPhase;
+    if (phase === 0 && unit.stateTick === 0 && (motion === "walk" || motion === "idle")) {
+      const cyclesPerSecond = motion === "walk" ? 1.45 : 0.42;
+      phase = Math.floor((timeSeconds * cyclesPerSecond + unit.id * 0.173) % 1 * 65_535);
+    }
+    return externalUnitVisualKey(asset.archetype, motion, frameIndexForPhase(frames.length, phase));
   }
   private createTowerPadMarkers(): void {
     const geometry = new THREE.CylinderGeometry(1.45, 1.65, 0.18, 12);
@@ -652,7 +745,8 @@ export class WorldRenderer {
       if (!batch || !counts) continue;
       const isBuilding = current.kind.includes("cannon") || current.kind.includes("tower");
       const size = isBuilding ? 1.3 : 1;
-      const bob = current.state === "walk" ? Math.abs(Math.sin(timeSeconds * 7.5 + current.id * 1.71)) * 0.075 : 0;
+      const walkCycle = current.motionPhase / 65_535 * Math.PI * 2;
+      const bob = current.state === "walk" ? Math.abs(Math.sin(walkCycle)) * 0.045 : 0;
       const hitShake = current.state === "hit" ? Math.sin(timeSeconds * 42 + current.id) * 0.11 : 0;
       const buildingPulse = current.state === "attack" ? 1 + Math.max(0, Math.sin(timeSeconds * 11 + current.id)) * 0.1 : 1;
       this.quaternion.setFromEuler(new THREE.Euler(0, rotation, 0));
@@ -667,8 +761,9 @@ export class WorldRenderer {
         ownerBuildingCounts[owner] = index + 1;
       } else {
         const archetype = unitArchetype(current.kind);
-        const pose = visualUnitPose(current.state, current.id, timeSeconds);
-        const key = unitVisualKey(archetype, pose);
+        const asset = this.externalUnitLibrary?.assets.get(archetype);
+        const key = asset ? this.riggedUnitVisualKey(asset, current, timeSeconds)
+          : unitVisualKey(archetype, visualUnitPose(current.state, current.stateTick, current.motionPhase));
         const mesh = batch.units.get(key);
         const outline = batch.outlines.get(key);
         const index = counts.get(key) ?? 0;
@@ -711,17 +806,13 @@ export class WorldRenderer {
       const batch = this.unitBatches[owner];
       const counts = ownerUnitCounts[owner];
       if (!batch || !counts) continue;
-      for (const archetype of UNIT_ARCHETYPES) {
-        for (const pose of UNIT_POSES) {
-          const key = unitVisualKey(archetype, pose);
-          const mesh = batch.units.get(key);
-          const outline = batch.outlines.get(key);
-          if (!mesh || !outline) continue;
-          mesh.count = counts.get(key) ?? 0;
-          outline.count = mesh.count;
-          mesh.instanceMatrix.needsUpdate = true;
-          outline.instanceMatrix.needsUpdate = true;
-        }
+      for (const [key, mesh] of batch.units) {
+        const outline = batch.outlines.get(key);
+        if (!outline) continue;
+        mesh.count = counts.get(key) ?? 0;
+        outline.count = mesh.count;
+        mesh.instanceMatrix.needsUpdate = true;
+        outline.instanceMatrix.needsUpdate = true;
       }
       batch.buildings.count = ownerBuildingCounts[owner] ?? 0;
       batch.buildings.instanceMatrix.needsUpdate = true;
@@ -887,9 +978,11 @@ export class WorldRenderer {
     } else {
       this.renderer.render(this.scene, this.camera);
     }
-    if (!this.firstFramePublished) {
-      this.firstFramePublished = true;
-      this.callbacks.onFirstFrame?.();
+    if (this.pendingFrameSessionId > 0) {
+      const renderedSessionId = this.pendingFrameSessionId;
+      this.pendingFrameSessionId = 0;
+      this.reportedFrameSessionId = renderedSessionId;
+      this.callbacks.onFirstFrame?.(renderedSessionId);
     }
     this.publishMetrics(now);
   };

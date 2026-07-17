@@ -11,13 +11,9 @@ import titleBackground from './assets/title-background.webp';
 import loadingBackground from './assets/loading-background.webp';
 import titleBackground1920 from './assets/title-background-1920.webp';
 import loadingBackground1920 from './assets/loading-background-1920.webp';
+import { FACTION_STYLES } from './game/factions';
 
-const factions = [
-  { name: 'REINO AZUL', color: '#3488c9' },
-  { name: 'DOMINIO CARMESÍ', color: '#d94e41' },
-  { name: 'PACTO ESMERALDA', color: '#43a962' },
-  { name: 'CORTE VIOLETA', color: '#a146c3' },
-] as const;
+const factions = FACTION_STYLES;
 
 const cards: readonly CardDisplay[] = [
   { id: 'guards', name: 'GUARDIÁN', cost: 3, icon: '', atlasIndex: 0, accent: '#477fbd', description: 'Un guardián cuerpo a cuerpo de 1,70 m.' },
@@ -475,7 +471,7 @@ export function App() {
             {ui.castles.map((castle, index) => {
               const faction = factions[index] ?? factions[0];
               return (
-                <div className={`kingdom-status${index === 0 ? ' player' : ''}${!castle.alive ? ' dead' : ''}`} key={index} style={{ '--faction-color': faction.color } as CSSProperties}>
+                <div className={`kingdom-status${index === 0 ? ' player' : ''}${!castle.alive ? ' dead' : ''}`} key={index} style={{ '--faction-color': faction.cssColor } as CSSProperties}>
                   <div className="kingdom-name">{faction.name}</div>
                   <div className="kingdom-health"><HeartIcon /><strong>{Math.max(0, Math.ceil(castle.health))}</strong></div>
                   <div className="health-track"><div className="health-fill" style={{ '--health': `${Math.max(0, castle.health / castle.maxHealth) * 100}%` } as CSSProperties} /></div>
