@@ -251,6 +251,11 @@ export function App() {
   useEffect(() => {
     if (mode !== 'loading') return;
     if (rendererReady && resourcesReady && firstSnapshot && firstFrame) {
+      workerRef.current?.postMessage({
+        type: 'pause',
+        sessionId: expectedSessionRef.current,
+        paused: false,
+      });
       modeRef.current = 'playing';
       setMode('playing');
       playSound('deploy');
