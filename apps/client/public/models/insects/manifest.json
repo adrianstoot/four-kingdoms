@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "units": {
+    "guard": {
+      "url": "generated-v1/ant.glb",
+      "forwardAxis": "+z",
+      "clips": {
+        "idle": "idle",
+        "walk": "walk",
+        "attack": "attack",
+        "hit": "hit",
+        "death": "death",
+        "spawn": "spawn"
+      },
+      "sampleFrames": {
+        "idle": 4,
+        "walk": 8,
+        "attack": 8,
+        "hit": 4,
+        "death": 8,
+        "spawn": 6
+      },
+      "tintMaterials": [
+        "team_mark"
+      ]
+    },
+    "archer": {
+      "url": "generated-v1/bee.glb",
+      "forwardAxis": "+z",
+      "clips": {
+        "idle": "idle",
+        "walk": "walk",
+        "attack": "attack",
+        "hit": "hit",
+        "death": "death",
+        "spawn": "spawn"
+      },
+      "sampleFrames": {
+        "idle": 4,
+        "walk": 8,
+        "attack": 8,
+        "hit": 4,
+        "death": 8,
+        "spawn": 6
+      },
+      "tintMaterials": [
+        "team_mark"
+      ]
+    },
+    "knight": {
+      "url": "generated-v1/mantis.glb",
+      "forwardAxis": "+z",
+      "clips": {
+        "idle": "idle",
+        "walk": "walk",
+        "attack": "attack",
+        "hit": "hit",
+        "death": "death",
+        "spawn": "spawn"
+      },
+      "sampleFrames": {
+        "idle": 4,
+        "walk": 8,
+        "attack": 8,
+        "hit": 4,
+        "death": 8,
+        "spawn": 6
+      },
+      "tintMaterials": [
+        "team_mark"
+      ]
+    },
+    "giant": {
+      "url": "generated-v1/beetle.glb",
+      "forwardAxis": "+z",
+      "clips": {
+        "idle": "idle",
+        "walk": "walk",
+        "attack": "attack",
+        "hit": "hit",
+        "death": "death",
+        "spawn": "spawn"
+      },
+      "sampleFrames": {
+        "idle": 4,
+        "walk": 8,
+        "attack": 8,
+        "hit": 4,
+        "death": 8,
+        "spawn": 6
+      },
+      "tintMaterials": [
+        "team_mark"
+      ]
+    },
+    "commander": {
+      "url": "generated-v1/butterfly.glb",
+      "forwardAxis": "+z",
+      "clips": {
+        "idle": "idle",
+        "walk": "walk",
+        "attack": "attack",
+        "hit": "hit",
+        "death": "death",
+        "spawn": "spawn"
+      },
+      "sampleFrames": {
+        "idle": 4,
+        "walk": 8,
+        "attack": 8,
+        "hit": 4,
+        "death": 8,
+        "spawn": 6
+      },
+      "tintMaterials": [
+        "team_mark"
+      ]
+    }
+  }
+}

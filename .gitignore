@@ -9,8 +9,17 @@ playtest-*.png
 
 *.tsbuildinfo
 .playwright-cli/
+.blender-tmp/
 output/
 copiar estetica.png
 reference/
 meshy_output/
 apps/client/dist-file/
+assets unidades 3d/
+blender_scripts/
+scripts/__pycache__/
+**/__pycache__/
+*.pyc
+REPARACION_AUTOMATICA_CODEX.cmd
+REPARAR_NAVEGADOR_CODEX.cmd
+scripts/play-matches.js

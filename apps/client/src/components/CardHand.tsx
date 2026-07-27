@@ -18,7 +18,7 @@ interface CardHandProps {
 
 export function CardHand({ cards, selectedId, elixir, cooldowns, onSelect }: CardHandProps) {
   return (
-    <div className="hand-wrap" aria-label="Unidades y hechizos disponibles">
+    <div className="hand-wrap" aria-label="Criaturas, nidos y fenómenos disponibles">
       {cards.map((card) => {
         const cooldown = cooldowns[card.id] ?? 0;
         const lacksElixir = elixir + 0.001 < card.cost;
@@ -27,7 +27,7 @@ export function CardHand({ cards, selectedId, elixir, cooldowns, onSelect }: Car
         const availability = cooldown > 0
           ? `Disponible en ${Math.ceil(cooldown / 20)} segundos`
           : lacksElixir
-            ? `Faltan ${Math.ceil(card.cost - elixir)} de elixir`
+            ? `Faltan ${Math.ceil(card.cost - elixir)} de néctar`
             : 'Disponible';
 
         return (
@@ -37,11 +37,11 @@ export function CardHand({ cards, selectedId, elixir, cooldowns, onSelect }: Car
             style={{
               '--accent': card.accent,
               '--atlas-x': `${(card.atlasIndex % 4) * (100 / 3)}%`,
-              '--atlas-y': `${Math.floor(card.atlasIndex / 4) * 80 + 10}%`,
+              '--atlas-y': `${Math.floor(card.atlasIndex / 4) * 100}%`,
             } as React.CSSProperties}
             key={card.id}
             title={`${card.description} · ${availability}`}
-            aria-label={`${card.name}, coste ${card.cost}. ${availability}`}
+            aria-label={`${card.name}, coste ${card.cost} de néctar. ${availability}`}
             aria-pressed={selected}
             data-unavailable={unavailable ? 'true' : undefined}
             onClick={() => onSelect(card.id)}
@@ -50,7 +50,7 @@ export function CardHand({ cards, selectedId, elixir, cooldowns, onSelect }: Car
             <span className="card-art" aria-hidden="true" />
             <span className="card-name">{card.name}</span>
             {cooldown > 0 && <span className="card-cooldown">{Math.ceil(cooldown / 20)}s</span>}
-            {cooldown <= 0 && lacksElixir && <span className="card-cooldown card-shortage">ELIXIR</span>}
+            {cooldown <= 0 && lacksElixir && <span className="card-cooldown card-shortage">NÉCTAR</span>}
           </button>
         );
       })}

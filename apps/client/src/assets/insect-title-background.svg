@@ -1,0 +1,294 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="2160" viewBox="0 0 3840 2160">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#061712"/>
+      <stop offset=".38" stop-color="#12382c"/>
+      <stop offset=".72" stop-color="#31533b"/>
+      <stop offset="1" stop-color="#9b6b32"/>
+    </linearGradient>
+    <radialGradient id="sunset" cx=".77" cy=".3" r=".58">
+      <stop stop-color="#ffe18c" stop-opacity=".9"/>
+      <stop offset=".22" stop-color="#dda84e" stop-opacity=".48"/>
+      <stop offset=".56" stop-color="#6c8a55" stop-opacity=".12"/>
+      <stop offset="1" stop-color="#071712" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ground" x1=".35" y1="0" x2=".56" y2="1">
+      <stop stop-color="#32462b"/>
+      <stop offset=".34" stop-color="#17271d"/>
+      <stop offset="1" stop-color="#050b08"/>
+    </linearGradient>
+    <linearGradient id="mound" x1=".25" y1="0" x2=".8" y2="1">
+      <stop stop-color="#d3a35c"/>
+      <stop offset=".25" stop-color="#936339"/>
+      <stop offset=".62" stop-color="#563628"/>
+      <stop offset="1" stop-color="#24191a"/>
+    </linearGradient>
+    <linearGradient id="ant-shell" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#cf8a48"/>
+      <stop offset=".34" stop-color="#743a2b"/>
+      <stop offset=".78" stop-color="#321821"/>
+      <stop offset="1" stop-color="#150c13"/>
+    </linearGradient>
+    <linearGradient id="mantis-shell" x1=".15" y1="0" x2=".82" y2="1">
+      <stop stop-color="#e5df6a"/>
+      <stop offset=".32" stop-color="#8cb443"/>
+      <stop offset=".68" stop-color="#456d32"/>
+      <stop offset="1" stop-color="#1b3724"/>
+    </linearGradient>
+    <linearGradient id="beetle-shell" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#a8b978"/>
+      <stop offset=".2" stop-color="#436553"/>
+      <stop offset=".5" stop-color="#18383a"/>
+      <stop offset=".76" stop-color="#39294a"/>
+      <stop offset="1" stop-color="#140f20"/>
+    </linearGradient>
+    <linearGradient id="bee-shell" x1=".1" y1="0" x2=".9" y2="1">
+      <stop stop-color="#ffe36a"/>
+      <stop offset=".48" stop-color="#dc9a27"/>
+      <stop offset="1" stop-color="#5c3515"/>
+    </linearGradient>
+    <linearGradient id="butterfly-wing" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#ffe673"/>
+      <stop offset=".37" stop-color="#f48b3c"/>
+      <stop offset=".7" stop-color="#b73c62"/>
+      <stop offset="1" stop-color="#542a70"/>
+    </linearGradient>
+    <linearGradient id="wing" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#eafff9" stop-opacity=".82"/>
+      <stop offset=".5" stop-color="#8ad1d2" stop-opacity=".34"/>
+      <stop offset="1" stop-color="#4f7c90" stop-opacity=".08"/>
+    </linearGradient>
+    <radialGradient id="nectar-glow">
+      <stop stop-color="#ffffcb"/>
+      <stop offset=".16" stop-color="#deff6a"/>
+      <stop offset=".5" stop-color="#63d878" stop-opacity=".65"/>
+      <stop offset="1" stop-color="#2bbba5" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="warm-glow">
+      <stop stop-color="#fff4c0"/>
+      <stop offset=".24" stop-color="#f4c661" stop-opacity=".8"/>
+      <stop offset=".62" stop-color="#d87835" stop-opacity=".2"/>
+      <stop offset="1" stop-color="#d87835" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#76994a"/>
+      <stop offset=".4" stop-color="#3f6b3a"/>
+      <stop offset="1" stop-color="#142b21"/>
+    </linearGradient>
+    <pattern id="soil-grain" width="56" height="56" patternUnits="userSpaceOnUse">
+      <circle cx="8" cy="12" r="3" fill="#d0a468" opacity=".13"/>
+      <circle cx="39" cy="41" r="4" fill="#030806" opacity=".27"/>
+      <path d="M3 48l22-7m17-31l11-4" stroke="#e2c08a" stroke-width="2" opacity=".08"/>
+    </pattern>
+    <filter id="mist" x="-30%" y="-50%" width="160%" height="200%">
+      <feGaussianBlur stdDeviation="65"/>
+    </filter>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="18" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="hero-shadow" x="-30%" y="-30%" width="170%" height="190%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="24"/>
+      <feOffset dx="8" dy="34"/>
+      <feColorMatrix values="0 0 0 0 0.01 0 0 0 0 0.02 0 0 0 0 0.015 0 0 0 .82 0"/>
+      <feBlend in="SourceGraphic"/>
+    </filter>
+    <filter id="far-blur"><feGaussianBlur stdDeviation="9"/></filter>
+    <symbol id="leaf-spray" viewBox="-180 -250 360 500">
+      <path d="M0 250Q-3 54 0-245" fill="none" stroke="#203928" stroke-width="18"/>
+      <g fill="url(#leaf)" stroke="#0c1d15" stroke-width="8">
+        <path d="M-6 134Q-137 16-168 91-182 160-15 180Z"/>
+        <path d="M4 77Q139-45 170 28 188 96 17 126Z"/>
+        <path d="M-4 13Q-122-95-151-31-164 31-12 61Z"/>
+        <path d="M5-54Q112-164 145-104q27 61-134 99Z"/>
+        <path d="M-2-121Q-76-223-105-175-128-124-8-80Z"/>
+      </g>
+      <g fill="none" stroke="#9aaa5d" stroke-width="4" opacity=".42">
+        <path d="M-16 170L-150 103M17 117L151 40M-12 51l-123-71M10-7l118-86M-8-80l-82-86"/>
+      </g>
+    </symbol>
+    <symbol id="mushroom" viewBox="-80 -150 160 300">
+      <path d="M-23 141Q-34 30-12-46h24q22 76 11 187Z" fill="#c7b897" stroke="#342b28" stroke-width="9"/>
+      <path d="M-73-38Q-43-129 0-136q43 7 73 98-72 39-146 0Z" fill="#87452f" stroke="#2a1e1e" stroke-width="10"/>
+      <g fill="#f2cf8e" opacity=".68"><circle cx="-34" cy="-64" r="9"/><circle cx="19" cy="-94" r="11"/><circle cx="43" cy="-51" r="7"/></g>
+    </symbol>
+    <symbol id="firefly" viewBox="-45 -45 90 90">
+      <ellipse cy="12" rx="10" ry="22" fill="#dfff63" stroke="#071817" stroke-width="5"/>
+      <ellipse cy="-11" rx="13" ry="17" fill="#183a34" stroke="#071817" stroke-width="5"/>
+      <path d="M-9-12Q-40-32-39-2q2 22 31 16M9-12q40-20 39 10-2 22-31 16" fill="url(#wing)" stroke="#347975" stroke-width="4"/>
+    </symbol>
+  </defs>
+
+  <!-- Deep jungle atmosphere and intentional title-space on the left -->
+  <rect width="3840" height="2160" fill="url(#sky)"/>
+  <rect width="3840" height="2160" fill="url(#sunset)"/>
+  <ellipse cx="2940" cy="565" rx="520" ry="420" fill="url(#warm-glow)" opacity=".42"/>
+  <circle cx="3130" cy="420" r="174" fill="#f5dfa1" opacity=".38" filter="url(#soft)"/>
+  <circle cx="3130" cy="420" r="132" fill="#f7e7b3" opacity=".44"/>
+
+  <!-- Distant stems and canopy -->
+  <g opacity=".38" filter="url(#far-blur)" fill="#07160f">
+    <path d="M110 0q240 350 160 900T355 1640H0V0Z"/>
+    <path d="M690 0q-90 420 77 780t-19 846H517q127-420-13-778T509 0Z"/>
+    <path d="M3440 0q-162 362-65 745t-130 863h430q-96-456 38-814T3685 0Z"/>
+    <ellipse cx="420" cy="176" rx="480" ry="210"/>
+    <ellipse cx="1665" cy="76" rx="720" ry="190"/>
+    <ellipse cx="3370" cy="122" rx="610" ry="205"/>
+  </g>
+  <g opacity=".46">
+    <use href="#leaf-spray" x="1180" y="530" width="420" height="640" transform="rotate(-23 1390 850)"/>
+    <use href="#leaf-spray" x="1790" y="350" width="360" height="570" transform="rotate(18 1970 635)"/>
+    <use href="#leaf-spray" x="3320" y="530" width="440" height="660" transform="rotate(19 3540 860)"/>
+    <use href="#leaf-spray" x="50" y="640" width="520" height="760" transform="rotate(-14 310 1020)" opacity=".5"/>
+  </g>
+  <g fill="#d8e7a0" opacity=".16" filter="url(#soft)">
+    <ellipse cx="980" cy="1010" rx="760" ry="130"/>
+    <ellipse cx="2810" cy="1000" rx="930" ry="150"/>
+  </g>
+
+  <!-- Midground roots and kingdom mound -->
+  <path d="M0 1260Q600 1115 1250 1245t1130-9q690-125 1460 79v845H0Z" fill="url(#ground)"/>
+  <path d="M0 1331q533-104 1078-21 452 70 870 16 770-99 1892 64" fill="none" stroke="#65774a" stroke-width="42" opacity=".28"/>
+  <path d="M0 1260Q600 1115 1250 1245t1130-9q690-125 1460 79v845H0Z" fill="url(#soil-grain)"/>
+
+  <!-- Main anthill citadel, right of title -->
+  <g filter="url(#hero-shadow)" stroke="#201514" stroke-linejoin="round">
+    <path d="M2475 1385Q2521 1171 2588 1040l37-331 113-137 82 114 116-264 116 264 82-114 113 137 37 331q67 131 113 345Z" fill="url(#mound)" stroke-width="32"/>
+    <path d="M2620 712q316 115 632 0M2584 918q352 100 704 0M2528 1138q408 111 816 0" fill="none" stroke="#e3bb71" stroke-width="16" opacity=".48"/>
+    <path d="M2936 433v837" stroke="#68402f" stroke-width="22" opacity=".74"/>
+    <path d="M2753 1183q183-177 366 0v241h-366Z" fill="#251817" stroke-width="28"/>
+    <path d="M2814 1203q122-107 244 0v221h-244Z" fill="#08140f" stroke="#855835" stroke-width="13"/>
+    <g fill="#101a13" stroke="#37251c" stroke-width="21">
+      <ellipse cx="2701" cy="832" rx="61" ry="88"/>
+      <ellipse cx="3171" cy="832" rx="61" ry="88"/>
+      <ellipse cx="2936" cy="945" rx="69" ry="98"/>
+    </g>
+    <g fill="#f3c85f" stroke="#5d381c" stroke-width="12" filter="url(#glow)">
+      <ellipse cx="2936" cy="733" rx="20" ry="30"/>
+      <ellipse cx="2768" cy="1040" rx="18" ry="26"/>
+      <ellipse cx="3104" cy="1040" rx="18" ry="26"/>
+    </g>
+    <path d="M2550 1310l-205 132h405M3322 1310l205 132h-405" fill="#8f5c38" stroke-width="28"/>
+  </g>
+
+  <!-- Bioluminescent path -->
+  <path d="M1680 2160q310-380 671-502 313-106 593-221" fill="none" stroke="#121d16" stroke-width="315"/>
+  <path d="M1680 2160q310-380 671-502 313-106 593-221" fill="none" stroke="#6e7541" stroke-width="248" opacity=".55"/>
+  <path d="M1680 2160q310-380 671-502 313-106 593-221" fill="none" stroke="#d7b86c" stroke-width="18" stroke-dasharray="15 39" opacity=".4"/>
+
+  <!-- Hero ant soldier -->
+  <g transform="translate(2390 1060) scale(1.23)" filter="url(#hero-shadow)" stroke="#150d11" stroke-linejoin="round" stroke-linecap="round">
+    <ellipse cx="0" cy="452" rx="105" ry="142" fill="url(#ant-shell)" stroke-width="22"/>
+    <ellipse cy="266" rx="97" ry="119" fill="url(#ant-shell)" stroke-width="22"/>
+    <path d="M-84 265q84 61 168 0v78q-84 66-168 0Z" fill="#305342" stroke-width="16"/>
+    <path d="M-66 296h132M-58 331h116" fill="none" stroke="#98ad62" stroke-width="10"/>
+    <path d="M-76 192Q-98 78 0 22q98 56 76 170Z" fill="url(#ant-shell)" stroke-width="22"/>
+    <path d="M-48 58q48-32 96 0l28 102q-76 49-152 0Z" fill="#542c29" stroke-width="13"/>
+    <ellipse cx="-50" cy="107" rx="24" ry="34" fill="#d7ba55" stroke-width="9"/>
+    <ellipse cx="50" cy="107" rx="24" ry="34" fill="#d7ba55" stroke-width="9"/>
+    <circle cx="-43" cy="96" r="8" fill="#fff6ba" stroke="none"/>
+    <circle cx="57" cy="96" r="8" fill="#fff6ba" stroke="none"/>
+    <path d="M-51 30q-52-89-101-71M51 30q52-89 101-71" fill="none" stroke="#49231f" stroke-width="15"/>
+    <path d="M-75 181q-47 26-70 81l65-22M75 181q47 26 70 81l-65-22" fill="#a6673a" stroke-width="13"/>
+    <path d="M-95 244q-88 49-113 133M95 244q88 49 113 133M-95 345q-77 74-83 166M95 345q77 74 83 166" fill="none" stroke="#562c25" stroke-width="25"/>
+    <path d="M-154 288l-105-95-65 145 112 47Z" fill="#456b4c" stroke-width="19"/>
+    <path d="M-243 211l-43-74" stroke="#e0ba6d" stroke-width="13"/>
+    <path d="M140 274l155-183" fill="none" stroke="#60472c" stroke-width="20"/>
+    <path d="M286 102l51-68 11 74-42 29Z" fill="#d4ae66" stroke-width="15"/>
+  </g>
+
+  <!-- Mantis commander -->
+  <g transform="translate(3380 930) scale(1.18)" filter="url(#hero-shadow)" stroke="#102016" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M-58 470Q0 605 58 470l54-284L0 92l-112 94Z" fill="url(#mantis-shell)" stroke-width="24"/>
+    <path d="M-62 484q-47 103-41 194M62 484q47 103 41 194" fill="none" stroke="#729644" stroke-width="28"/>
+    <path d="M-107 667l-54 39M107 667l54 39" stroke="#c2ca60" stroke-width="18"/>
+    <path d="M-86 198Q-209 205-272 328l95-31-80 127 135-84 82-91Z" fill="#b5c752" stroke-width="24"/>
+    <path d="M86 198q123 7 186 130l-95-31 80 127-135-84-82-91Z" fill="#b5c752" stroke-width="24"/>
+    <path d="M-82 218l-131 99M82 218l131 99" stroke="#f0e27a" stroke-width="11"/>
+    <path d="M-102 181Q-192 101-253-11l84 49-25-115L-73 48l62 88Z" fill="#527d34" stroke-width="24"/>
+    <path d="M102 181q90-80 151-192l-84 49 25-115L73 48l-62 88Z" fill="#527d34" stroke-width="24"/>
+    <path d="M-96 62Q-105-82 0-136 105-82 96 62L0 172Z" fill="url(#mantis-shell)" stroke-width="26"/>
+    <path d="M-79 18L0-105 79 18 0 111Z" fill="#b9ca53" stroke-width="14"/>
+    <ellipse cx="-80" cy="5" rx="52" ry="68" fill="#426b46" stroke-width="14" transform="rotate(-18 -80 5)"/>
+    <ellipse cx="80" cy="5" rx="52" ry="68" fill="#426b46" stroke-width="14" transform="rotate(18 80 5)"/>
+    <ellipse cx="-71" cy="-3" rx="20" ry="31" fill="#f1d75d" stroke="none"/>
+    <ellipse cx="71" cy="-3" rx="20" ry="31" fill="#f1d75d" stroke="none"/>
+    <circle cx="-62" cy="-12" r="8" fill="#fffbd1" stroke="none"/>
+    <circle cx="80" cy="-12" r="8" fill="#fffbd1" stroke="none"/>
+    <path d="M-33-112q-44-83-81-106M33-112q44-83 81-106" fill="none" stroke="#6d8f3d" stroke-width="15"/>
+  </g>
+
+  <!-- Rhino beetle foreground -->
+  <g transform="translate(3040 1645) scale(1.05)" filter="url(#hero-shadow)" stroke="#100d15" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M-170 246q-102 40-147 139M170 246q102 40 147 139M-170 354q-89 82-102 192M170 354q89 82 102 192" fill="none" stroke="#2b4138" stroke-width="38"/>
+    <ellipse cy="365" rx="190" ry="224" fill="url(#beetle-shell)" stroke-width="30"/>
+    <path d="M0 145v432" stroke="#0c1720" stroke-width="18"/>
+    <path d="M-154 287q154 70 308 0M-173 404q173 65 346 0" fill="none" stroke="#87936d" stroke-width="11" opacity=".47"/>
+    <path d="M-120 192Q-129 39 0 4q129 35 120 188L0 298Z" fill="#294139" stroke-width="28"/>
+    <path d="M-82 76Q-148-135 0-252q148 117 82 328L0 220Z" fill="url(#beetle-shell)" stroke-width="29"/>
+    <path d="M0-225q77 117 37 260L0 146-37 35Q-77-108 0-225Z" fill="#8b9870" stroke-width="14"/>
+    <ellipse cx="-79" cy="126" rx="30" ry="41" fill="#b6d86e" stroke-width="10"/>
+    <ellipse cx="79" cy="126" rx="30" ry="41" fill="#b6d86e" stroke-width="10"/>
+    <circle cx="-68" cy="115" r="8" fill="#f7ffce" stroke="none"/>
+    <circle cx="90" cy="115" r="8" fill="#f7ffce" stroke="none"/>
+  </g>
+
+  <!-- Bee ranger in flight -->
+  <g transform="translate(2610 510) rotate(-13) scale(.82)" filter="url(#hero-shadow)" stroke="#16110d" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M-42 8Q-215-227-289-145q-61 68 28 205 79 121 234 93Z" fill="url(#wing)" stroke="#487a7d" stroke-width="18"/>
+    <path d="M42 8q173-235 247-153 61 68-28 205-79 121-234 93Z" fill="url(#wing)" stroke="#487a7d" stroke-width="18"/>
+    <path d="M-68 92q-153-48-185 49-24 76 179 118L0 145Z" fill="url(#wing)" stroke="#487a7d" stroke-width="17"/>
+    <path d="M68 92q153-48 185 49 24 76-179 118L0 145Z" fill="url(#wing)" stroke="#487a7d" stroke-width="17"/>
+    <ellipse cy="140" rx="82" ry="142" fill="url(#bee-shell)" stroke-width="23"/>
+    <path d="M-76 84q76 48 152 0M-82 147q82 51 164 0M-69 210q69 43 138 0" fill="none" stroke="#2a2014" stroke-width="28"/>
+    <ellipse cy="-17" rx="98" ry="89" fill="#76502a" stroke-width="23"/>
+    <ellipse cx="-59" cy="-19" rx="32" ry="42" fill="#285353" stroke-width="10"/>
+    <ellipse cx="59" cy="-19" rx="32" ry="42" fill="#285353" stroke-width="10"/>
+    <path d="M-42-75q-49-93-88-99M42-75q49-93 88-99" fill="none" stroke="#34251a" stroke-width="14"/>
+    <path d="M-24 270L0 383l24-113" fill="#edc34d" stroke-width="15"/>
+  </g>
+
+  <!-- Monarch silhouette above the citadel -->
+  <g transform="translate(3460 485) rotate(12) scale(.54)" filter="url(#hero-shadow)" stroke="#201027" stroke-linejoin="round">
+    <path d="M-22 12Q-210-294-342-193q-93 72 14 232 91 136 281 132Z" fill="url(#butterfly-wing)" stroke-width="24"/>
+    <path d="M22 12q210-306 342-205 93 72-14 232-91 136-281 132Z" fill="url(#butterfly-wing)" stroke-width="24"/>
+    <path d="M-45 135q-196-58-240 91-34 114 222 202L0 235Z" fill="url(#butterfly-wing)" stroke-width="24"/>
+    <path d="M45 135q196-58 240 91 34 114-222 202L0 235Z" fill="url(#butterfly-wing)" stroke-width="24"/>
+    <path d="M-28-14Q-80-134-127-174M28-14q52-120 99-160" fill="none" stroke="#d9a651" stroke-width="18"/>
+    <ellipse cy="164" rx="40" ry="184" fill="#3b273f" stroke-width="20"/>
+    <g fill="#ffefad" stroke="#4d254b" stroke-width="8">
+      <circle cx="-272" cy="-146" r="20"/><circle cx="272" cy="-146" r="20"/>
+      <circle cx="-226" cy="264" r="18"/><circle cx="226" cy="264" r="18"/>
+    </g>
+  </g>
+
+  <!-- Ground flora and fireflies -->
+  <g opacity=".82">
+    <use href="#mushroom" x="210" y="1580" width="210" height="410"/>
+    <use href="#mushroom" x="570" y="1780" width="130" height="260" transform="rotate(8 635 1910)"/>
+    <use href="#mushroom" x="3530" y="1640" width="170" height="340" transform="rotate(-9 3615 1810)"/>
+  </g>
+  <g filter="url(#glow)">
+    <circle cx="1870" cy="1120" r="86" fill="url(#nectar-glow)" opacity=".55"/>
+    <use href="#firefly" x="1818" y="1068" width="104" height="104"/>
+    <circle cx="2204" cy="732" r="64" fill="url(#nectar-glow)" opacity=".43"/>
+    <use href="#firefly" x="2164" y="692" width="80" height="80" transform="rotate(18 2204 732)"/>
+    <circle cx="3300" cy="1122" r="52" fill="url(#nectar-glow)" opacity=".4"/>
+    <use href="#firefly" x="3266" y="1088" width="68" height="68"/>
+  </g>
+  <g fill="#e9ff88" opacity=".8" filter="url(#glow)">
+    <circle cx="1510" cy="946" r="8"/><circle cx="1755" cy="754" r="6"/><circle cx="2010" cy="1262" r="10"/>
+    <circle cx="2350" cy="620" r="7"/><circle cx="3650" cy="850" r="9"/><circle cx="3470" cy="1280" r="6"/>
+  </g>
+
+  <!-- Foreground vignette vegetation -->
+  <g opacity=".95">
+    <use href="#leaf-spray" x="-140" y="1230" width="720" height="1080" transform="rotate(-18 220 1770)"/>
+    <use href="#leaf-spray" x="3450" y="1290" width="650" height="1030" transform="rotate(19 3775 1805)"/>
+  </g>
+  <path d="M0 0h3840v2160H0Z" fill="none" stroke="#020706" stroke-width="120" opacity=".38"/>
+  <rect width="1700" height="2160" fill="url(#sky)" opacity=".23"/>
+</svg>

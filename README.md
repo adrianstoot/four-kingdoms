@@ -1,61 +1,89 @@
-# Cuatro Reinos — batalla local 2v2
+# Imperios del Enjambre
 
-Juego de estrategia y cartas construido con TypeScript, React y Three.js. La partida se simula localmente: no hay cuentas, servidor multijugador ni conexiones WebSocket.
+Juego de estrategia 3D local para navegador, desarrollado con TypeScript, React y Three.js. Una alianza de dos colonias combate contra otro equipo de dos hormigueros sobre un micromundo vivo de raíces, hojas, resina y bioluminiscencia.
 
-## Partida
+## Jugar
 
-- Equipo Azul: Reino Azul (tú) y Pacto Esmeralda (IA media).
-- Equipo Rival: Dominio Carmesí y Corte Violeta (ambos IA media).
-- Sólo tú controlas cartas y despliegues. Los otros tres reinos son autónomos.
-- No existe fuego amigo. Gana el equipo que destruye los dos castillos rivales.
-- El círculo central acelera la regeneración de elixir del equipo que lo controla.
-- Elixir maximo: 100; la barra muestra diez tramos de 10 puntos.
-- Las tres IA de nivel medio coordinan defensa 2v2, objetivo central, torres, heroes y hechizos con reglas deterministas.
+**Versión web:** [https://adrianstoot.github.io/four-kingdoms/](https://adrianstoot.github.io/four-kingdoms/)
 
-## Jugar sin abrir Codex
+La partida es completamente local: no requiere cuenta, servidor multijugador ni conexión WebSocket.
 
-Haz doble clic en `JUGAR.cmd`. El lanzador abre el build de producción en el navegador mediante un servidor local ligero.
+## Batalla 2v2
 
-Para desarrollo:
+- Alianza Zafiro: Colonia Zafiro, controlada por ti, y Nido Esmeralda, dirigido por una IA.
+- Enjambre rival: Enjambre Rubí y Colmena Amatista, ambos dirigidos por IA.
+- Las tres IA usan las mismas cartas, costes, zonas de despliegue y reglas que el jugador.
+- No existe fuego amigo. Vence el equipo que destruye los dos hormigueros rivales.
+- El Corazón del Bosque concede una bonificación de regeneración de néctar al equipo que lo controla.
+- Cada colonia almacena hasta 100 puntos de néctar.
+- La simulación es determinista, funciona a 20 Hz y se ejecuta en un Web Worker.
 
-```powershell
-npm install
-npm run dev
-```
+## Criaturas y fenómenos
 
-Después abre `http://127.0.0.1:5173/`.
+La mano completa permanece siempre disponible:
+
+- Hormiga Soldado: combatiente de primera línea.
+- Abeja Aguijón: hostigadora aérea de largo alcance.
+- Mantis Cazadora: depredadora veloz con ataque de carga.
+- Escarabajo Titán: ariete viviente especializado en estructuras.
+- Monarca: heroína alada única con reaparición.
+- Torre Termita: nido defensivo para los pads laterales.
+- Bomba Ácida: proyectil corrosivo con daño de área.
+- Enjambre Eléctrico: luciérnagas ionizadas que encadenan varios objetivos.
 
 ## Controles
 
-- Haz clic en una carta y después en un tramo válido para desplegar.
-- `Q` / `E`: girar la cámara 90°.
-- Rueda del ratón: zoom.
-- `WASD` o flechas: desplazar la cámara.
-- Los hechizos se pueden lanzar sobre cualquier carril.
+- Haz clic en una carta y después en una zona válida del camino para desplegarla.
+- La carta continúa seleccionada para permitir despliegues rápidos consecutivos.
+- `Esc` o un clic derecho corto cancelan la selección.
+- Arrastra con el botón derecho para rotar e inclinar la cámara.
+- Arrastra con el botón central para desplazar el punto de enfoque.
+- Usa la rueda para acercar o alejar la cámara hacia la posición del cursor.
+- `WASD`, las flechas y los bordes de la pantalla desplazan la vista.
+- `Q` y `E` giran la cámara.
+- Los fenómenos pueden apuntar a cualquier carril.
 
-## Dirección artística
+## Arte y tecnología
 
-- Ilustración de fantasía con contorno oscuro y sombreado por bandas.
-- Tablero isométrico con anillo, rombo interior y cuatro rutas centrales.
-- Ocho cartas con una única lámina de arte 4×2 recortada por CSS.
-- Castillos, tropas, vegetación, caminos y objetivo creados de forma procedural en Three.js.
-- El arte del juego es original y se distribuye con este proyecto.
+- Micromundo insectoide con hormigueros, raíces, setas, piedras, hojas, polen y luciérnagas.
+- Criaturas animadas con estados de aparición, reposo, marcha, ataque, impacto y muerte.
+- Terreno, vegetación, estructuras, efectos, cartas y fondos creados específicamente para este proyecto.
+- Arte 100 % original: geometría procedural de Three.js, SVG vectoriales propios y modelos construidos mediante los scripts Blender incluidos en el repositorio.
+- No se incorporan imágenes, modelos ni animaciones descargados de terceros.
+- Render WebGPU cuando está disponible, con fallback WebGL2.
+- Cámara RTS 3D, instancing, pooling de efectos, interpolación de snapshots y rutas por spline.
+- Sonido original sintetizado por código y reproducido con Howler.
 
-## Modo gráfico seguro
+## Desarrollo
 
-WebGL2, calidad media y un máximo de 768 entidades son los valores predeterminados para evitar problemas de controladores WebGPU. WebGPU queda como opción manual mediante `?webgpu`.
+Requiere Node.js con npm.
 
-## Verificación
+```powershell
+npm ci
+npm run dev
+```
+
+Abre `http://127.0.0.1:5173/`.
+
+## Build y pruebas
 
 ```powershell
 npm test
+npm run typecheck
 npm run build
 npm run benchmark
 ```
 
+El build de producción se genera en `apps/client/dist`.
+
+## Publicación
+
+Cada actualización de la rama `main` ejecuta `.github/workflows/deploy-pages.yml`, compila el proyecto y publica `apps/client/dist` en GitHub Pages.
+
 ## Arquitectura
 
-- `packages/content`: catálogo JSON y mapa de cinco nodos/doce carriles.
-- `packages/sim`: simulación determinista, equipos 2v2, economía, IA, rutas, combate y victoria.
-- `apps/client`: Web Worker, Vite, React, HUD y renderer procedural Three.js.
-- `.github/workflows/deploy-pages.yml`: build y publicación automática en GitHub Pages.
+- `packages/content`: catálogo validado, mapa, carriles, rutas y zonas de despliegue.
+- `packages/sim`: economía, equipos 2v2, IA, combate, captura y victoria deterministas.
+- `apps/client`: interfaz React, Web Worker, audio y renderer Three.js.
+- `apps/client/src/game/environment`: entorno procedural del micromundo.
+- `apps/client/public/models/insects`: modelos y manifiesto de las criaturas insectoides.

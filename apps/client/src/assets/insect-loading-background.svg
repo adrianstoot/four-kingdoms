@@ -1,0 +1,230 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="2160" viewBox="0 0 3840 2160">
+  <defs>
+    <linearGradient id="cavern" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#07120f"/>
+      <stop offset=".38" stop-color="#142a20"/>
+      <stop offset=".7" stop-color="#2d3321"/>
+      <stop offset="1" stop-color="#11120f"/>
+    </linearGradient>
+    <radialGradient id="heart-glow">
+      <stop stop-color="#fffbd0"/>
+      <stop offset=".12" stop-color="#dfff79"/>
+      <stop offset=".38" stop-color="#69d986" stop-opacity=".82"/>
+      <stop offset=".68" stop-color="#2f9d8c" stop-opacity=".28"/>
+      <stop offset="1" stop-color="#17362d" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="amber-glow">
+      <stop stop-color="#fff2bc"/>
+      <stop offset=".18" stop-color="#f6c96c"/>
+      <stop offset=".52" stop-color="#c67a34" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#6a3520" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="soil" x1=".1" y1="0" x2=".9" y2="1">
+      <stop stop-color="#806044"/>
+      <stop offset=".35" stop-color="#4a352b"/>
+      <stop offset=".72" stop-color="#281e1c"/>
+      <stop offset="1" stop-color="#100e0e"/>
+    </linearGradient>
+    <linearGradient id="resin" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#f5d586"/>
+      <stop offset=".25" stop-color="#c88c45"/>
+      <stop offset=".65" stop-color="#775037"/>
+      <stop offset="1" stop-color="#31251f"/>
+    </linearGradient>
+    <linearGradient id="root" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#8b7450"/>
+      <stop offset=".4" stop-color="#4c4730"/>
+      <stop offset="1" stop-color="#19231b"/>
+    </linearGradient>
+    <linearGradient id="chrysalis" x1=".2" y1="0" x2=".8" y2="1">
+      <stop stop-color="#f6efac"/>
+      <stop offset=".2" stop-color="#b9dd68"/>
+      <stop offset=".58" stop-color="#4aa772"/>
+      <stop offset="1" stop-color="#1a5d5a"/>
+    </linearGradient>
+    <linearGradient id="ant" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#c57b42"/><stop offset=".42" stop-color="#653225"/><stop offset="1" stop-color="#211217"/>
+    </linearGradient>
+    <linearGradient id="egg" x1=".15" y1="0" x2=".85" y2="1">
+      <stop stop-color="#fff6ce"/><stop offset=".42" stop-color="#d5d98f"/><stop offset="1" stop-color="#81966b"/>
+    </linearGradient>
+    <pattern id="soil-grain" width="64" height="64" patternUnits="userSpaceOnUse">
+      <circle cx="11" cy="14" r="4" fill="#d1a56d" opacity=".12"/>
+      <circle cx="45" cy="43" r="5" fill="#020604" opacity=".3"/>
+      <path d="M5 53l19-8m25-34l10-5" stroke="#dfbd86" stroke-width="2" opacity=".08"/>
+    </pattern>
+    <pattern id="cell-pattern" width="108" height="94" patternUnits="userSpaceOnUse" patternTransform="rotate(8)">
+      <path d="M27 2h54l27 45-27 45H27L0 47Z" fill="none" stroke="#d3a657" stroke-width="7" opacity=".24"/>
+    </pattern>
+    <filter id="blur"><feGaussianBlur stdDeviation="40"/></filter>
+    <filter id="far"><feGaussianBlur stdDeviation="10"/></filter>
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="22" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="small-glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="7" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="depth-shadow" x="-30%" y="-30%" width="170%" height="190%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="22"/>
+      <feOffset dy="28"/>
+      <feColorMatrix values="0 0 0 0 0.01 0 0 0 0 0.02 0 0 0 0 0.015 0 0 0 .88 0"/>
+      <feBlend in="SourceGraphic"/>
+    </filter>
+    <symbol id="worker-ant" viewBox="-120 -120 240 240">
+      <g fill="none" stroke="#261619" stroke-width="15" stroke-linecap="round">
+        <path d="M-42-4l-77-42M-45 23l-75 37M42-4l77-42M45 23l75 37"/>
+        <path d="M-31 46l-52 70M31 46l52 70"/>
+      </g>
+      <ellipse cy="55" rx="45" ry="61" fill="url(#ant)" stroke="#1c1115" stroke-width="12"/>
+      <ellipse cy="2" rx="39" ry="44" fill="url(#ant)" stroke="#1c1115" stroke-width="12"/>
+      <ellipse cy="-48" rx="35" ry="31" fill="url(#ant)" stroke="#1c1115" stroke-width="12"/>
+      <path d="M-20-72q-30-38-51-32M20-72q30-38 51-32" fill="none" stroke="#4e2822" stroke-width="9" stroke-linecap="round"/>
+      <ellipse cx="-20" cy="-53" rx="7" ry="10" fill="#dfc45f"/>
+      <ellipse cx="20" cy="-53" rx="7" ry="10" fill="#dfc45f"/>
+    </symbol>
+    <symbol id="larva" viewBox="-110 -60 220 120">
+      <path d="M-94 10q17-59 52-25 24-54 61-11 33-39 58 4 35-13 27 35-16 54-72 31-43 35-72 0-45 28-54-34Z" fill="url(#egg)" stroke="#41392a" stroke-width="10"/>
+      <path d="M-47-6q8 34 0 54M11-19q10 35 3 61M66-12q8 27 3 49" fill="none" stroke="#929c6d" stroke-width="6" opacity=".65"/>
+    </symbol>
+    <symbol id="firefly" viewBox="-45 -45 90 90">
+      <ellipse cy="12" rx="10" ry="22" fill="#dfff63" stroke="#071817" stroke-width="5"/>
+      <ellipse cy="-11" rx="13" ry="17" fill="#173832" stroke="#071817" stroke-width="5"/>
+      <path d="M-9-12Q-40-32-39-2q2 22 31 16M9-12q40-20 39 10-2 22-31 16" fill="#c9ffff" fill-opacity=".35" stroke="#347975" stroke-width="4"/>
+    </symbol>
+  </defs>
+
+  <rect width="3840" height="2160" fill="url(#cavern)"/>
+  <ellipse cx="1920" cy="965" rx="1180" ry="900" fill="url(#heart-glow)" opacity=".2"/>
+
+  <!-- Upper earth ceiling and hanging roots -->
+  <path d="M0 0h3840v390q-270 194-587 76-290-108-520 45-260 175-550-12-285-184-531 4-292 223-564 30-241-171-500-20-283 165-588-16Z" fill="url(#soil)"/>
+  <path d="M0 0h3840v390q-270 194-587 76-290-108-520 45-260 175-550-12-285-184-531 4-292 223-564 30-241-171-500-20-283 165-588-16Z" fill="url(#soil-grain)"/>
+  <g fill="none" stroke="url(#root)" stroke-linecap="round">
+    <path d="M315 0q45 425 299 641t33 508" stroke-width="78"/>
+    <path d="M848 0q-31 346 151 482t-32 427" stroke-width="52"/>
+    <path d="M1512 0q112 330-52 590t72 510" stroke-width="66"/>
+    <path d="M2360 0q-108 378 62 573t-44 479" stroke-width="62"/>
+    <path d="M3031 0q32 338-160 517t57 495" stroke-width="74"/>
+    <path d="M3584 0q-129 401-314 533t-16 449" stroke-width="58"/>
+  </g>
+  <g fill="none" stroke="#a8945c" stroke-linecap="round" opacity=".22">
+    <path d="M315 0q45 425 299 641t33 508" stroke-width="12"/>
+    <path d="M1512 0q112 330-52 590t72 510" stroke-width="10"/>
+    <path d="M3031 0q32 338-160 517t57 495" stroke-width="12"/>
+  </g>
+
+  <!-- Carved colony walls and chambers -->
+  <path d="M0 1015q412-332 808-117 308 167 595-43 251-184 517 13 267-197 518-13 287 210 595 43 396-215 807 117v1145H0Z" fill="url(#soil)" opacity=".78"/>
+  <path d="M0 1015q412-332 808-117 308 167 595-43 251-184 517 13 267-197 518-13 287 210 595 43 396-215 807 117v1145H0Z" fill="url(#soil-grain)"/>
+
+  <!-- Left and right nursery chambers -->
+  <g filter="url(#depth-shadow)" stroke="#2d201a" stroke-width="30">
+    <path d="M111 1172q137-330 520-318 388 12 479 365 84 324-176 522-315 240-660 27-271-168-163-596Z" fill="#1c2a20"/>
+    <path d="M3729 1172q-137-330-520-318-388 12-479 365-84 324 176 522 315 240 660 27 271-168 163-596Z" fill="#1c2a20"/>
+  </g>
+  <path d="M128 1192q165-295 506-280 348 15 421 326 65 278-168 448-280 203-577 15-227-144-182-509Z" fill="url(#cell-pattern)" opacity=".58"/>
+  <path d="M3712 1192q-165-295-506-280-348 15-421 326-65 278 168 448 280 203 577 15 227-144 182-509Z" fill="url(#cell-pattern)" opacity=".58"/>
+
+  <!-- Central resin architecture -->
+  <g filter="url(#depth-shadow)" stroke="#2a201a" stroke-linejoin="round">
+    <path d="M1395 1774q104-240 207-329l36-674 92-133 70 116 120-305 120 305 70-116 92 133 36 674q103 89 207 329Z" fill="url(#resin)" stroke-width="34"/>
+    <path d="M1640 772q280 123 560 0M1627 1000q293 102 586 0M1589 1283q331 106 662 0M1518 1584q402 116 804 0" fill="none" stroke="#f0d28b" stroke-width="15" opacity=".42"/>
+    <path d="M1920 464v1219" stroke="#6e4934" stroke-width="22" opacity=".75"/>
+    <path d="M1640 1704q280-310 560 0v126h-560Z" fill="#101712" stroke-width="28"/>
+    <ellipse cx="1749" cy="1085" rx="53" ry="82" fill="#121b15" stroke-width="20"/>
+    <ellipse cx="2091" cy="1085" rx="53" ry="82" fill="#121b15" stroke-width="20"/>
+    <ellipse cx="1920" cy="1308" rx="71" ry="102" fill="#0d1712" stroke-width="22"/>
+  </g>
+
+  <!-- Suspended luminous chrysalis, distinct loading focal point -->
+  <g filter="url(#glow)">
+    <ellipse cx="1920" cy="884" rx="460" ry="620" fill="url(#heart-glow)" opacity=".5"/>
+    <path d="M1920 291q229 168 196 463-26 227-196 430-170-203-196-430-33-295 196-463Z" fill="url(#chrysalis)" stroke="#20483d" stroke-width="26"/>
+    <path d="M1768 520q152 121 304 0M1733 681q187 128 374 0M1747 849q173 116 346 0M1800 1018q120 81 240 0" fill="none" stroke="#eaff9c" stroke-width="14" opacity=".48"/>
+    <path d="M1920 310q-81 187-62 392t62 463q43-258 62-463t-62-392Z" fill="#d6ee82" opacity=".22"/>
+    <path d="M1891 606q29-41 58 0v208q-29 65-58 0Z" fill="#f8ffd0" opacity=".42"/>
+  </g>
+
+  <!-- Organic energy veins -->
+  <g fill="none" stroke-linecap="round" filter="url(#small-glow)">
+    <path d="M1918 1160q-170 184-414 230t-372 220-473 76" stroke="#80e58c" stroke-width="18" opacity=".55"/>
+    <path d="M1922 1160q170 184 414 230t372 220 473 76" stroke="#80e58c" stroke-width="18" opacity=".55"/>
+    <path d="M1855 1168q-35 225-217 367t-177 436" stroke="#45c99e" stroke-width="12" opacity=".48"/>
+    <path d="M1985 1168q35 225 217 367t177 436" stroke="#45c99e" stroke-width="12" opacity=".48"/>
+    <path d="M1704 802q-223-46-344-213t-322-190" stroke="#d8e879" stroke-width="9" opacity=".3"/>
+    <path d="M2136 802q223-46 344-213t322-190" stroke="#d8e879" stroke-width="9" opacity=".3"/>
+  </g>
+
+  <!-- Larvae and eggs in nursery chambers -->
+  <g filter="url(#depth-shadow)">
+    <g transform="translate(450 1180)">
+      <use href="#larva" x="-150" y="-70" width="300" height="165" transform="rotate(-10)"/>
+      <use href="#larva" x="90" y="105" width="260" height="142" transform="rotate(19 220 176)"/>
+      <use href="#larva" x="-240" y="220" width="240" height="132" transform="rotate(-19 -120 286)"/>
+    </g>
+    <g transform="translate(3200 1180)">
+      <use href="#larva" x="-150" y="-70" width="300" height="165" transform="rotate(11)"/>
+      <use href="#larva" x="-350" y="105" width="260" height="142" transform="rotate(-17 -220 176)"/>
+      <use href="#larva" x="0" y="220" width="240" height="132" transform="rotate(18 120 286)"/>
+    </g>
+  </g>
+  <g fill="url(#egg)" stroke="#3e382b" stroke-width="12" opacity=".96">
+    <ellipse cx="340" cy="1510" rx="48" ry="69" transform="rotate(-18 340 1510)"/>
+    <ellipse cx="625" cy="1034" rx="42" ry="61" transform="rotate(14 625 1034)"/>
+    <ellipse cx="840" cy="1454" rx="46" ry="65" transform="rotate(22 840 1454)"/>
+    <ellipse cx="3500" cy="1510" rx="48" ry="69" transform="rotate(18 3500 1510)"/>
+    <ellipse cx="3215" cy="1034" rx="42" ry="61" transform="rotate(-14 3215 1034)"/>
+    <ellipse cx="3000" cy="1454" rx="46" ry="65" transform="rotate(-22 3000 1454)"/>
+  </g>
+
+  <!-- Worker processions -->
+  <g filter="url(#depth-shadow)">
+    <use href="#worker-ant" x="790" y="1615" width="230" height="230" transform="rotate(33 905 1730)"/>
+    <use href="#worker-ant" x="1060" y="1460" width="190" height="190" transform="rotate(39 1155 1555)"/>
+    <use href="#worker-ant" x="1275" y="1320" width="150" height="150" transform="rotate(48 1350 1395)"/>
+    <use href="#worker-ant" x="2820" y="1615" width="230" height="230" transform="rotate(-33 2935 1730)"/>
+    <use href="#worker-ant" x="2590" y="1460" width="190" height="190" transform="rotate(-39 2685 1555)"/>
+    <use href="#worker-ant" x="2415" y="1320" width="150" height="150" transform="rotate(-48 2490 1395)"/>
+  </g>
+
+  <!-- Food stores and resin pearls -->
+  <g fill="#e8bd55" stroke="#50341e" stroke-width="12" filter="url(#small-glow)">
+    <circle cx="968" cy="1135" r="38"/><circle cx="1048" cy="1195" r="29"/><circle cx="947" cy="1239" r="25"/>
+    <circle cx="2872" cy="1135" r="38"/><circle cx="2792" cy="1195" r="29"/><circle cx="2893" cy="1239" r="25"/>
+  </g>
+  <g fill="#81e687" opacity=".72" filter="url(#small-glow)">
+    <circle cx="1520" cy="1441" r="13"/><circle cx="1450" cy="1510" r="8"/><circle cx="1344" cy="1595" r="10"/>
+    <circle cx="2320" cy="1441" r="13"/><circle cx="2390" cy="1510" r="8"/><circle cx="2496" cy="1595" r="10"/>
+  </g>
+
+  <!-- Firefly attendants orbiting the chrysalis -->
+  <g filter="url(#glow)">
+    <circle cx="1350" cy="655" r="100" fill="url(#heart-glow)" opacity=".35"/>
+    <use href="#firefly" x="1290" y="595" width="120" height="120" transform="rotate(-18 1350 655)"/>
+    <circle cx="2490" cy="655" r="100" fill="url(#heart-glow)" opacity=".35"/>
+    <use href="#firefly" x="2430" y="595" width="120" height="120" transform="rotate(18 2490 655)"/>
+    <circle cx="1504" cy="1052" r="70" fill="url(#heart-glow)" opacity=".3"/>
+    <use href="#firefly" x="1461" y="1009" width="86" height="86"/>
+    <circle cx="2336" cy="1052" r="70" fill="url(#heart-glow)" opacity=".3"/>
+    <use href="#firefly" x="2293" y="1009" width="86" height="86"/>
+  </g>
+
+  <!-- High chamber amber lights -->
+  <g filter="url(#glow)">
+    <ellipse cx="812" cy="678" rx="185" ry="160" fill="url(#amber-glow)" opacity=".3"/>
+    <circle cx="812" cy="678" r="34" fill="#f4cb6c"/>
+    <ellipse cx="3028" cy="678" rx="185" ry="160" fill="url(#amber-glow)" opacity=".3"/>
+    <circle cx="3028" cy="678" r="34" fill="#f4cb6c"/>
+  </g>
+  <g fill="#eeff8d" filter="url(#small-glow)">
+    <circle cx="1170" cy="780" r="9"/><circle cx="2670" cy="780" r="9"/>
+    <circle cx="990" cy="940" r="6"/><circle cx="2850" cy="940" r="6"/>
+    <circle cx="1650" cy="310" r="7"/><circle cx="2190" cy="310" r="7"/>
+  </g>
+
+  <!-- Bottom foreground kept dark for the loading panel -->
+  <path d="M0 1940q440-110 895-39 519 82 1025-18 506 100 1025 18 455-71 895 39v220H0Z" fill="#050907" opacity=".9"/>
+  <path d="M0 0h3840v2160H0Z" fill="none" stroke="#020504" stroke-width="135" opacity=".5"/>
+</svg>

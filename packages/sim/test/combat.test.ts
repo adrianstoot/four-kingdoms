@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ARCHETYPES_BY_ID,
   MAP_GRAPH,
   buildRoutePaths,
   createGame,
@@ -48,6 +49,51 @@ function spawnOpposed(
 }
 
 describe('deterministic lane-bound combat', () => {
+  it('lands every repeated strike on the same anticipation phase without resetting the animation clock', () => {
+    const route = paths.get('p0_inner_e')!;
+    const guard = ARCHETYPES_BY_ID.guard;
+    const game = createGame({ seed: 0xa77ac, botPlayers: [], maxEntities: 16 });
+    const guardId = game.spawnDebugCombatant(
+      route.routeId,
+      'guard',
+      route.length - guard.attackRange - 2.4 + 0.05,
+    );
+    const hitTicks: number[] = [];
+    const contactStateTicks: number[] = [];
+    const contactMotionPhases: number[] = [];
+
+    for (let tick = 0; tick < 100 && hitTicks.length < 3; tick += 1) {
+      const snapshot = game.step();
+      const hit = snapshot.events.find((event) => (
+        event.type === 'damage'
+        && event.sourceId === guardId
+        && event.targetType === 'castle'
+        && event.targetId === route.destinationPlayerId
+      ));
+      if (!hit) continue;
+      const guardIndex = entityIndex(snapshot, guardId);
+      expect(guardIndex).toBeGreaterThanOrEqual(0);
+      hitTicks.push(snapshot.tick);
+      contactStateTicks.push(snapshot.entities.stateTick[guardIndex]!);
+      contactMotionPhases.push(snapshot.entities.motionPhase[guardIndex]!);
+    }
+
+    expect(hitTicks).toHaveLength(3);
+    expect(hitTicks.slice(1).map((tick, index) => tick - hitTicks[index]!)).toEqual([
+      guard.attackCooldownTicks,
+      guard.attackCooldownTicks,
+    ]);
+    expect(contactStateTicks.map((tick) => tick % guard.attackCooldownTicks)).toEqual([
+      guard.attackAnticipationTicks,
+      guard.attackAnticipationTicks,
+      guard.attackAnticipationTicks,
+    ]);
+    const expectedPhase = Math.round(
+      guard.attackAnticipationTicks / guard.attackCooldownTicks * 65_535,
+    );
+    expect(contactMotionPhases).toEqual([expectedPhase, expectedPhase, expectedPhase]);
+  });
+
   it('engages on every outer and inner lane without leaving or passing through the centerline', () => {
     const opposedRoutes: [string, string][] = [
       ['p0_outer_e', 'p1_outer_n'],
@@ -101,9 +147,25 @@ describe('deterministic lane-bound combat', () => {
     const eastId = game.spawnDebugCombatant('p1_center', 'guard', pathEast.centerDistance - 5);
     const attackers = new Set<number>();
     let firstContactRadius = Number.POSITIVE_INFINITY;
+    const previousYaw = new Map<number, number>();
+    const shortestAngle = (from: number, to: number) => {
+      const fullTurn = Math.PI * 2;
+      const wrapped = (to - from + Math.PI) % fullTurn;
+      return Math.abs((wrapped < 0 ? wrapped + fullTurn : wrapped) - Math.PI);
+    };
 
     for (let tick = 0; tick < 240 && attackers.size < 2; tick += 1) {
       const snapshot = game.step();
+      for (const entityId of [northId, eastId]) {
+        const index = entityIndex(snapshot, entityId);
+        if (index < 0) continue;
+        const yaw = snapshot.entities.yaw[index]! / 65_535 * Math.PI * 2;
+        const prior = previousYaw.get(entityId);
+        if (prior !== undefined && snapshot.entities.targetId[index]! >= 0) {
+          expect(shortestAngle(prior, yaw)).toBeLessThanOrEqual(Math.PI / 8 + 0.002);
+        }
+        previousYaw.set(entityId, yaw);
+      }
       for (const event of snapshot.events) {
         if (
           event.type !== 'damage'
@@ -113,6 +175,11 @@ describe('deterministic lane-bound combat', () => {
         ) continue;
         attackers.add(event.sourceId);
         const source = worldPosition(snapshot, event.sourceId);
+        const target = worldPosition(snapshot, event.targetId);
+        const sourceIndex = entityIndex(snapshot, event.sourceId);
+        const sourceYaw = snapshot.entities.yaw[sourceIndex]! / 65_535 * Math.PI * 2;
+        const targetYaw = Math.atan2(target.x - source.x, target.z - source.z);
+        expect(shortestAngle(sourceYaw, targetYaw)).toBeLessThanOrEqual(Math.PI / 9 + 0.025);
         firstContactRadius = Math.min(firstContactRadius, Math.hypot(source.x, source.z));
       }
     }
@@ -211,7 +278,7 @@ describe('deterministic lane-bound combat', () => {
       ));
       if (hit?.type === 'damage') firstKnightHit = hit.amount;
     }
-    expect(firstKnightHit).toBe(104);
+    expect(firstKnightHit).toBe(Math.round(ARCHETYPES_BY_ID.knight.damage * 1.6));
   });
   it('lets archers hold a ranged standoff while guards must close to melee range', () => {
     const { game, idA: archerId, idB: guardId } = spawnOpposed(
@@ -238,7 +305,7 @@ describe('deterministic lane-bound combat', () => {
       arrowDamage = hit.amount;
     }
 
-    expect(arrowDamage).toBe(28);
+    expect(arrowDamage).toBe(ARCHETYPES_BY_ID.archer.damage);
     expect(arrowDistance).toBeGreaterThan(4.5);
     expect(arrowDistance).toBeLessThanOrEqual(7.25);
   });
@@ -285,7 +352,7 @@ describe('deterministic lane-bound combat', () => {
 
     snapshot = game.step();
     expect(snapshot.tick).toBe(projectile.impactTick);
-    expect(entityHealth(snapshot, guardId)).toBe(hpBeforeFlight - 28);
+    expect(entityHealth(snapshot, guardId)).toBe(hpBeforeFlight - ARCHETYPES_BY_ID.archer.damage);
     const impact = snapshot.events.find((event) => (
       event.type === 'projectile-impact' && event.projectileId === projectile.projectileId
     ));
@@ -310,7 +377,7 @@ describe('deterministic lane-bound combat', () => {
       sourceId: archerId,
       targetType: 'entity',
       targetId: guardId,
-      amount: 28,
+      amount: ARCHETYPES_BY_ID.archer.damage,
     }));
   });
 
@@ -335,7 +402,32 @@ describe('deterministic lane-bound combat', () => {
       }
     }
 
-    expect(knightHits.slice(0, 2)).toEqual([104, 65]);
+    expect(knightHits.slice(0, 2)).toEqual([
+      Math.round(ARCHETYPES_BY_ID.knight.damage * 1.6),
+      ARCHETYPES_BY_ID.knight.damage,
+    ]);
+  });
+
+  it('requires real travelled distance before granting the mounted charge bonus', () => {
+    const { game, idA: knightId, idB: guardId } = spawnOpposed(
+      'p0_outer_e',
+      'knight',
+      'p1_outer_n',
+      'guard',
+      3,
+    );
+    let firstImpact = -1;
+    for (let tick = 0; tick < 120 && firstImpact < 0; tick += 1) {
+      const snapshot = game.step();
+      const hit = snapshot.events.find((event) => (
+        event.type === 'damage'
+        && event.sourceId === knightId
+        && event.targetType === 'entity'
+        && event.targetId === guardId
+      ));
+      if (hit?.type === 'damage') firstImpact = hit.amount;
+    }
+    expect(firstImpact).toBe(ARCHETYPES_BY_ID.knight.damage);
   });
 
   it('keeps giants focused on a reachable tower even while infantry attacks them', () => {

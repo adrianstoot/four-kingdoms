@@ -25,8 +25,8 @@ export function visualUnitPose(state: string, stateTick: number, motionPhase: nu
     const attackPhase = phase > 0
       ? phase
       : Math.min(1, (tick % LEGACY_ATTACK_CYCLE_TICKS) / LEGACY_ATTACK_CYCLE_TICKS);
-    // On the impact tick the simulation resets stateTick but deliberately
-    // retains the contact phase calculated for that frame.
+    // Contact remains stable even for transition snapshots whose stateTick is
+    // zero but whose authoritative motion phase already reached the strike.
     if (tick === 0 && attackPhase >= 0.24) return "attack";
     if (attackPhase < 0.3) return "attackWindup";
     if (attackPhase < 0.48) return "attack";

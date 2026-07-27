@@ -18,6 +18,7 @@ import {
   findSpellPlacement,
   nearestOnRoutePath,
   pointOnPolyline,
+  routeSectionAt,
   sampleRoutePath,
   type RoutePath,
 } from './placement';
@@ -46,12 +47,31 @@ const SPATIAL_CELL_SIZE = 8;
 const BOT_DECISION_INTERVAL = 24;
 const BOT_DEFENSE_RADIUS = 31;
 const BOT_URGENT_THREAT_SCORE = 145;
-const HIT_RECOVERY_TICKS = 4;
+// --- Enhanced AI constants (AoE/Total War/Clash Royale inspired) ---
+/** Minimum elixir to save before committing a coordinated push. */
+const BOT_PUSH_ELIXIR_THRESHOLD = 12_000;
+/** Maximum ticks a bot will save elixir before spending regardless. */
+const BOT_MAX_SAVE_TICKS = 160;
+/** After a push, wait this many ticks before starting a new save cycle. */
+const BOT_PUSH_COOLDOWN_TICKS = 80;
+/** Strength score at which a lane is considered "overloaded" by enemies. */
+const BOT_LANE_OVERLOAD_THRESHOLD = 180;
+/** How many recent enemy deploys to remember for counter-pick analysis. */
+const BOT_ENEMY_MEMORY_SIZE = 12;
+const HIT_RECOVERY_TICKS = 5;
+const HIT_STAGGER_IMMUNITY_TICKS = 12;
+const DEATH_PRESENTATION_TICKS = 32;
+const MIN_ATTACK_RECOVERY_TICKS = 3;
 const TARGET_LOCK_RANGE_MULTIPLIER = 1.45;
 const BODY_CLEARANCE = 0.1;
+// Reserve enough room on every radial before the junction. After capture the
+// lower-priority formation can yield here while the older one clears the turn.
+const CENTER_HOLD_DISTANCE = 1.05;
 const GIANT_BLOCKER_MARGIN = 0.55;
-const KNIGHT_CHARGE_MIN_TICKS = 20;
+const KNIGHT_CHARGE_MIN_DISTANCE_MM = 2_450;
 const KNIGHT_CHARGE_DAMAGE_BPS = 16_000;
+const COMBAT_TURN_RADIANS_PER_TICK = Math.PI / 8;
+const ATTACK_ARC_HALF_ANGLE = Math.PI / 9;
 const ARROW_SPEED_METERS_PER_SECOND = 24;
 const MIN_ARROW_FLIGHT_TICKS = 3;
 const archetypeCodes: Record<ArchetypeId, ArchetypeCode> = {
@@ -163,6 +183,19 @@ interface BotTacticsState {
   fireballCast: boolean;
   chainLightningCast: boolean;
   supportWaves: number;
+  // --- Enhanced AI state ---
+  /** Tick at which the bot started saving elixir for a coordinated push. */
+  savingStartTick: number;
+  /** Whether the bot is currently in "save for push" mode. */
+  savingForPush: boolean;
+  /** Tick of the last completed push to prevent immediate re-saving. */
+  lastPushTick: number;
+  /** Route ID of the last push to enable lane alternation. */
+  lastPushRouteId: string | null;
+  /** Counter tracking: recent enemy archetypes deployed against this bot. */
+  recentEnemyArchetypes: ArchetypeCode[];
+  /** Number of consecutive pushes on the same lane (triggers flanking). */
+  sameLanePushCount: number;
 }
 
 class Random {
@@ -210,7 +243,8 @@ class EntityStore {
   readonly routeDistance: Float32Array;
   readonly laneOffset: Float32Array;
   readonly attackCooldown: Int16Array;
-  readonly chargeTicks: Uint16Array;
+  readonly staggerImmunity: Uint8Array;
+  readonly chargeDistanceMm: Uint16Array;
   readonly lifetime: Int32Array;
   readonly cardCost: Uint8Array;
   private readonly idToIndex = new Map<number, number>();
@@ -237,7 +271,8 @@ class EntityStore {
     this.routeDistance = new Float32Array(capacity);
     this.laneOffset = new Float32Array(capacity);
     this.attackCooldown = new Int16Array(capacity);
-    this.chargeTicks = new Uint16Array(capacity);
+    this.staggerImmunity = new Uint8Array(capacity);
+    this.chargeDistanceMm = new Uint16Array(capacity);
     this.lifetime = new Int32Array(capacity);
     this.cardCost = new Uint8Array(capacity);
     this.routeIndex.fill(-1);
@@ -282,7 +317,8 @@ class EntityStore {
     this.routeDistance[index] = values.routeDistance;
     this.laneOffset[index] = values.laneOffset;
     this.attackCooldown[index] = 0;
-    this.chargeTicks[index] = 0;
+    this.staggerImmunity[index] = 0;
+    this.chargeDistanceMm[index] = 0;
     this.lifetime[index] = values.lifetime ?? -1;
     this.cardCost[index] = values.cardCost;
     this.idToIndex.set(id, index);
@@ -304,7 +340,8 @@ class EntityStore {
     this.active[index] = 0;
     this.targetId[index] = -1;
     this.routeIndex[index] = -1;
-    this.chargeTicks[index] = 0;
+    this.staggerImmunity[index] = 0;
+    this.chargeDistanceMm[index] = 0;
     this.count -= 1;
   }
 }
@@ -325,6 +362,12 @@ export class GameSimulation {
     fireballCast: false,
     chainLightningCast: false,
     supportWaves: 0,
+    savingStartTick: 0,
+    savingForPush: false,
+    lastPushTick: -999,
+    lastPushRouteId: null,
+    recentEnemyArchetypes: [],
+    sameLanePushCount: 0,
   }));
   private bots = new Set<PlayerId>();
   private events: SimEvent[] = [];
@@ -467,6 +510,20 @@ export class GameSimulation {
       .sort((left, right) => left - right);
     if (orderedBots.length === 0) return;
     const spatial = this.buildSpatialHash();
+
+    // Track enemy spawns for counter-pick analysis
+    for (const event of this.events) {
+      if (event.type !== 'spawn') continue;
+      for (const botId of this.bots) {
+        if (teamForPlayer(event.playerId) === teamForPlayer(botId)) continue;
+        const tactics = this.botTactics[botId]!;
+        tactics.recentEnemyArchetypes.push(event.archetype);
+        if (tactics.recentEnemyArchetypes.length > BOT_ENEMY_MEMORY_SIZE) {
+          tactics.recentEnemyArchetypes.shift();
+        }
+      }
+    }
+
     for (const playerId of orderedBots) {
       const player = this.players[playerId];
       if (!player?.alive) continue;
@@ -486,14 +543,142 @@ export class GameSimulation {
       const tactics = this.botTactics[playerId]!;
       const urgentDefense = threat.castle !== null && threat.score >= BOT_URGENT_THREAT_SCORE;
       const fireAim = this.findBestFireballAim(playerId, spellCandidates, spatial);
+      const fireReservedByAlly = fireAim !== null
+        && this.hasPendingAlliedSpellNear(playerId, 'fireball', fireAim.position);
       const fireWorthwhile = fireAim !== null
+        && !fireReservedByAlly
         && (fireAim.hits >= 2 || (urgentDefense && fireAim.hits >= 1) || fireAim.score >= 300);
       const chainAim = this.findBestChainAim(playerId, spellCandidates, spatial);
+      const chainReservedByAlly = chainAim !== null
+        && this.hasPendingAlliedSpellNear(playerId, 'chain_lightning', chainAim.position);
       const chainWorthwhile = chainAim !== null
+        && !chainReservedByAlly
         && (chainAim.hits >= 2 || (urgentDefense && chainAim.hits >= 1) || chainAim.score >= 200);
       const teamOwnsCenter = this.center.ownerPlayerId !== null
         && teamForPlayer(this.center.ownerPlayerId) === teamForPlayer(playerId);
       const setupObjective: 'center' | 'offense' = teamOwnsCenter ? 'offense' : 'center';
+
+      // ===== ENHANCED AI: Coordinated Push System (AoE/Clash Royale inspired) =====
+      // After initial setup, bots save elixir for coordinated pushes instead of
+      // dripping units one at a time. A push deploys tank + support in rapid
+      // succession on the same lane for overwhelming force concentration.
+      const setupComplete = tactics.commanderDeployed && tactics.towerDeployed && tactics.supportWaves >= 1;
+      const pushCooldownExpired = this.tick - tactics.lastPushTick >= BOT_PUSH_COOLDOWN_TICKS;
+
+      // Complete each bot's tactical spell toolkit before starting another
+      // coordinated push. A chain with at least two legal targets is itself
+      // the stronger defensive response, so it may reserve its exact cost even
+      // under pressure instead of feeding single cheap units into the threat.
+      const unusedChain = !tactics.chainLightningCast && chainAim && chainWorthwhile
+        ? { cardId: 'chain_lightning' as const, aim: chainAim }
+        : null;
+      const unusedFireball = !tactics.fireballCast && fireAim && fireWorthwhile
+        ? { cardId: 'fireball' as const, aim: fireAim }
+        : null;
+      const tacticalSpell = setupComplete
+        ? unusedChain?.aim.hits && unusedChain.aim.hits >= 2
+          ? unusedChain
+          : unusedFireball ?? unusedChain
+        : null;
+      if (tacticalSpell) {
+        if (affordableIds.includes(tacticalSpell.cardId)) {
+          if (this.queueCommand({
+            type: 'spell', playerId, cardId: tacticalSpell.cardId,
+            sequence: player.lastSequence + 1, tick: this.tick,
+            position: tacticalSpell.aim.position,
+          }).accepted) {
+            if (tacticalSpell.cardId === 'fireball') tactics.fireballCast = true;
+            else tactics.chainLightningCast = true;
+            continue;
+          }
+        }
+        const highValueDefensiveChain = tacticalSpell.cardId === 'chain_lightning'
+          && tacticalSpell.aim.hits >= 2;
+        if (!urgentDefense || highValueDefensiveChain) continue;
+      }
+
+      if (setupComplete && !urgentDefense && pushCooldownExpired) {
+        // Start saving for a push if not already
+        if (!tactics.savingForPush) {
+          tactics.savingForPush = true;
+          tactics.savingStartTick = this.tick;
+        }
+
+        const savingDuration = this.tick - tactics.savingStartTick;
+        const hasEnoughForPush = player.elixirMilli >= BOT_PUSH_ELIXIR_THRESHOLD;
+        const savingTooLong = savingDuration >= BOT_MAX_SAVE_TICKS;
+
+        // While saving, only cast worthwhile spells (don't spend elixir on troops)
+        if (!hasEnoughForPush && !savingTooLong) {
+          // Finish unused tactical spells before repeating one. Without this
+          // memory gate, fireball's stable first priority can starve chain
+          // lightning for the whole match.
+          if (!tactics.fireballCast && affordableIds.includes('fireball') && fireAim && fireWorthwhile && player.elixirMilli >= BOT_PUSH_ELIXIR_THRESHOLD - 2_000) {
+            if (this.queueCommand({
+              type: 'spell', playerId, cardId: 'fireball', sequence: player.lastSequence + 1,
+              tick: this.tick, position: fireAim.position,
+            }).accepted) {
+              tactics.fireballCast = true;
+              continue;
+            }
+          }
+          if (!tactics.chainLightningCast && affordableIds.includes('chain_lightning') && chainAim && chainWorthwhile && player.elixirMilli >= BOT_PUSH_ELIXIR_THRESHOLD - 2_000) {
+            if (this.queueCommand({
+              type: 'spell', playerId, cardId: 'chain_lightning', sequence: player.lastSequence + 1,
+              tick: this.tick, position: chainAim.position,
+            }).accepted) {
+              tactics.chainLightningCast = true;
+              continue;
+            }
+          }
+          // Keep saving - skip troop deployment
+          continue;
+        }
+
+        // ===== EXECUTE COORDINATED PUSH =====
+        if (hasEnoughForPush || savingTooLong) {
+          tactics.savingForPush = false;
+          tactics.lastPushTick = this.tick;
+
+          // Flanking: If we've pushed the same lane 2+ times, switch lanes
+          const focus = this.weakestEnemyCastle(playerId);
+          const laneStrengths = this.analyzeLaneStrengths(playerId);
+          let pushRoute: Route | null = null;
+
+          if (tactics.sameLanePushCount >= 2) {
+            // Flanking maneuver: pick a different lane
+            pushRoute = this.chooseBotFlankRoute(playerId, tactics.lastPushRouteId, focus?.playerId ?? null);
+            tactics.sameLanePushCount = 0;
+          } else {
+            // Pick the weakest enemy lane (least defended)
+            pushRoute = this.chooseBotPushRoute(playerId, laneStrengths, focus?.playerId ?? null);
+          }
+
+          if (pushRoute) {
+            // Track consecutive same-lane pushes
+            if (pushRoute.id === tactics.lastPushRouteId) {
+              tactics.sameLanePushCount += 1;
+            } else {
+              tactics.sameLanePushCount = 1;
+            }
+            tactics.lastPushRouteId = pushRoute.id;
+
+            // Deploy the push wave: tank first, then support
+            const pushComposition = this.choosePushComposition(playerId, affordableIds, tactics);
+
+            for (const cardId of pushComposition) {
+              if (player.elixirMilli < (CARDS_BY_ID[cardId]?.cost ?? 99) * 1_000) break;
+              if ((player.cooldowns[cardId] ?? 0) > 0) continue;
+              if (cardId === 'commander' && this.hasActiveCommander(playerId)) continue;
+              this.queueBotDeployment(playerId, cardId as Exclude<CardId, 'fireball' | 'chain_lightning'>, pushRoute);
+              if (cardId === 'commander') tactics.commanderDeployed = true;
+            }
+          }
+          continue;
+        }
+      }
+
+      // ===== ORIGINAL TACTICAL PHASES (early game / defense) =====
 
       // Medium bots open with a hero, a lane tower and a grouped support wave.
       // They wait for the required elixir instead of spending every three points,
@@ -624,7 +809,7 @@ export class GameSimulation {
         : centerNeedsHelp && centerResponder === playerId
           ? 'center'
           : 'offense';
-      const cardId = this.chooseBotTroop(playerId, affordableIds, objective, threat);
+      const cardId = this.chooseBotTroopEnhanced(playerId, affordableIds, objective, threat, tactics);
       if (!cardId) continue;
       const targetPlayerId = objective === 'defense'
         ? threat.sourcePlayerId ?? focus?.playerId ?? null
@@ -636,7 +821,258 @@ export class GameSimulation {
     }
   }
 
+  // ===== ENHANCED AI: Lane strength analysis =====
+  /** Analyzes enemy strength per route for flanking decisions. */
+  private analyzeLaneStrengths(
+    playerId: PlayerId,
+  ): Map<string, { friendly: number; enemy: number }> {
+    const strengths = new Map<string, { friendly: number; enemy: number }>();
+    const playerRoutes = this.routePaths
+      .filter((route) => route.playerId === playerId && route.kind === 'direct')
+      .sort((left, right) => left.routeId < right.routeId ? -1 : left.routeId > right.routeId ? 1 : 0);
+    for (const route of playerRoutes) strengths.set(route.routeId, { friendly: 0, enemy: 0 });
+
+    for (let index = 0; index < this.entities.capacity; index += 1) {
+      if (this.entities.active[index] === 0 || this.entities.state[index] === EntityStateCode.Death) continue;
+      const routeIndex = this.entities.routeIndex[index]!;
+      const entityRoute = this.routePaths[routeIndex];
+      if (!entityRoute) continue;
+      const definition = this.definitionAt(index);
+      const value = definition.damage * TICK_RATE / definition.attackCooldownTicks + definition.maxHp * 0.02;
+      const owner = this.entities.owner[index] as PlayerId;
+      const position = { x: this.entities.x[index]!, z: this.entities.z[index]! };
+      const entitySection = routeSectionAt(entityRoute, this.entities.routeDistance[index]!);
+
+      // A unit belongs to one physical lane only. Reciprocal routes share the
+      // same lane id, while projection verifies the unit is still inside that
+      // lane's real corridor (including edge-mounted towers). This prevents
+      // units near the map origin or a castle from being counted on every lane.
+      let bestRoute: RoutePath | null = null;
+      let bestLateralDistance = Number.POSITIVE_INFINITY;
+      for (const playerRoute of playerRoutes) {
+        const matchingSection = playerRoute.sections.find((section) => section.laneId === entitySection.laneId);
+        if (!matchingSection) continue;
+        const projection = nearestOnRoutePath(playerRoute, position);
+        const laneReach = matchingSection.width * 0.5 + definition.physicalRadius + 1e-6;
+        if (projection.lateralDistance > laneReach) continue;
+        if (
+          projection.lateralDistance < bestLateralDistance
+          || (
+            projection.lateralDistance === bestLateralDistance
+            && bestRoute !== null
+            && playerRoute.routeId < bestRoute.routeId
+          )
+        ) {
+          bestRoute = playerRoute;
+          bestLateralDistance = projection.lateralDistance;
+        }
+      }
+      if (!bestRoute) continue;
+      const entry = strengths.get(bestRoute.routeId);
+      if (!entry) continue;
+      if (teamForPlayer(owner) === teamForPlayer(playerId)) entry.friendly += value;
+      else entry.enemy += value;
+    }
+    return strengths;
+  }
+
+  // ===== ENHANCED AI: Flanking route selection =====
+  /** Chooses a route different from the last push for flanking. */
+  private chooseBotFlankRoute(
+    playerId: PlayerId,
+    lastRouteId: string | null,
+    targetPlayerId: PlayerId | null,
+  ): Route | null {
+    const routes = getRoutesForPlayer(playerId);
+    let candidates = routes.filter((route) =>
+      route.kind === 'direct'
+      && route.id !== lastRouteId
+      && this.castles[route.destinationPlayerId]?.alive
+      && this.isEnemyPlayer(playerId, route.destinationPlayerId),
+    );
+    if (targetPlayerId !== null) {
+      const focused = candidates.filter((route) => route.destinationPlayerId === targetPlayerId);
+      if (focused.length > 0) candidates = focused;
+    }
+    if (candidates.length === 0) {
+      // Fallback to any available route
+      return this.chooseBotRoute(playerId, 'offense', targetPlayerId);
+    }
+    // Pick the least defended route
+    const laneStrengths = this.analyzeLaneStrengths(playerId);
+    candidates.sort((left, right) => {
+      const leftPressure = laneStrengths.get(left.id)?.enemy ?? 0;
+      const rightPressure = laneStrengths.get(right.id)?.enemy ?? 0;
+      return leftPressure - rightPressure || (left.id < right.id ? -1 : 1);
+    });
+    return candidates[0] ?? null;
+  }
+
+  // ===== ENHANCED AI: Push route selection (weakest enemy defense) =====
+  private chooseBotPushRoute(
+    playerId: PlayerId,
+    laneStrengths: Map<string, { friendly: number; enemy: number }>,
+    targetPlayerId: PlayerId | null,
+  ): Route | null {
+    const routes = getRoutesForPlayer(playerId);
+    let candidates = routes.filter((route) =>
+      route.kind === 'direct'
+      && this.castles[route.destinationPlayerId]?.alive
+      && this.isEnemyPlayer(playerId, route.destinationPlayerId),
+    );
+    if (targetPlayerId !== null) {
+      const focused = candidates.filter((route) => route.destinationPlayerId === targetPlayerId);
+      if (focused.length > 0) candidates = focused;
+    }
+    // Sort by enemy weakness (least enemy strength)
+    candidates.sort((left, right) => {
+      const leftEnemy = laneStrengths.get(left.id)?.enemy ?? 0;
+      const rightEnemy = laneStrengths.get(right.id)?.enemy ?? 0;
+      return leftEnemy - rightEnemy || (left.id < right.id ? -1 : 1);
+    });
+    return candidates[0] ?? null;
+  }
+
+  // ===== ENHANCED AI: Push composition (tank + support wave) =====
+  /** Selects cards for a coordinated push wave: tank first, ranged support behind. */
+  private choosePushComposition(
+    playerId: PlayerId,
+    affordableIds: readonly CardId[],
+    tactics: BotTacticsState,
+  ): Exclude<CardId, 'fireball' | 'chain_lightning'>[] {
+    const composition: Exclude<CardId, 'fireball' | 'chain_lightning'>[] = [];
+    const player = this.players[playerId]!;
+    let remainingElixir = player.elixirMilli;
+    const enemyProfile = this.analyzeEnemyComposition(tactics);
+
+    // Counter-pick logic: choose tank based on what enemy deploys
+    // If enemy has many ranged → use knight (fast, tanky, charges through)
+    // If enemy has many melee → use giant (massive HP absorbs melee)
+    // Default → giant for siege pressure
+    const tankPriority: Exclude<CardId, 'fireball' | 'chain_lightning'>[] = enemyProfile.rangedHeavy
+      ? ['knight', 'giant', 'commander']
+      : ['giant', 'knight', 'commander'];
+
+    // 1. Lead with the tank
+    for (const tankId of tankPriority) {
+      if (!affordableIds.includes(tankId)) continue;
+      const cost = CARDS_BY_ID[tankId]!.cost * 1_000;
+      if (remainingElixir < cost) continue;
+      if (tankId === 'commander' && this.hasActiveCommander(playerId)) continue;
+      composition.push(tankId);
+      remainingElixir -= cost;
+      break;
+    }
+
+    // 2. Add support units behind the tank
+    // Counter-pick: archers vs melee enemies, guards vs ranged enemies
+    const supportPriority: Exclude<CardId, 'fireball' | 'chain_lightning'>[] = enemyProfile.meleeHeavy
+      ? ['archers', 'guards', 'commander']
+      : ['guards', 'archers', 'commander'];
+
+    for (const supportId of supportPriority) {
+      const cost = (CARDS_BY_ID[supportId]?.cost ?? 99) * 1_000;
+      if (remainingElixir < cost) continue;
+      if (!affordableIds.includes(supportId)) continue;
+      if (supportId === 'commander' && (this.hasActiveCommander(playerId) || composition.includes('commander'))) continue;
+      if (composition.includes(supportId)) continue;
+      composition.push(supportId);
+      remainingElixir -= cost;
+    }
+
+    // 3. Fill remaining elixir with cheap units
+    for (const fillId of ['guards', 'archers'] as Exclude<CardId, 'fireball' | 'chain_lightning'>[]) {
+      const cost = (CARDS_BY_ID[fillId]?.cost ?? 99) * 1_000;
+      if (remainingElixir < cost || composition.includes(fillId)) continue;
+      if (!affordableIds.includes(fillId)) continue;
+      composition.push(fillId);
+      remainingElixir -= cost;
+    }
+
+    return composition;
+  }
+
+  // ===== ENHANCED AI: Enemy composition analysis for counter-picking =====
+  private analyzeEnemyComposition(tactics: BotTacticsState): {
+    meleeHeavy: boolean;
+    rangedHeavy: boolean;
+    siegePresent: boolean;
+  } {
+    let melee = 0;
+    let ranged = 0;
+    let siege = 0;
+    for (const archetype of tactics.recentEnemyArchetypes) {
+      if (archetype === ArchetypeCode.Archer) ranged += 1;
+      else if (archetype === ArchetypeCode.Giant) siege += 1;
+      else melee += 1; // Guard, Knight, Commander count as melee
+    }
+    const total = Math.max(1, melee + ranged + siege);
+    return {
+      meleeHeavy: melee / total >= 0.5,
+      rangedHeavy: ranged / total >= 0.4,
+      siegePresent: siege > 0,
+    };
+  }
+
+  // ===== ENHANCED AI: Troop selection with counter-pick logic =====
+  private chooseBotTroopEnhanced(
+    playerId: PlayerId,
+    affordableIds: readonly CardId[],
+    objective: 'defense' | 'center' | 'offense',
+    threat: BotThreatSummary,
+    tactics: BotTacticsState,
+  ): Exclude<CardId, 'cannon_tower' | 'fireball' | 'chain_lightning'> | null {
+    const troopIds: readonly Exclude<CardId, 'cannon_tower' | 'fireball' | 'chain_lightning'>[] = [
+      'guards', 'archers', 'knight', 'giant', 'commander',
+    ];
+    const player = this.players[playerId]!;
+    const enemyMelee = threat.indices.filter((index) => {
+      const code = this.entities.archetype[index]!;
+      return code === ArchetypeCode.Guard || code === ArchetypeCode.Knight || code === ArchetypeCode.Giant || code === ArchetypeCode.Commander;
+    }).length;
+    const enemyRanged = threat.indices.filter((index) =>
+      this.entities.archetype[index] === ArchetypeCode.Archer,
+    ).length;
+    const enemyProfile = this.analyzeEnemyComposition(tactics);
+
+    let best: typeof troopIds[number] | null = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    for (let order = 0; order < troopIds.length; order += 1) {
+      const cardId = troopIds[order]!;
+      if (!affordableIds.includes(cardId)) continue;
+      let score = 0;
+      if (objective === 'defense') {
+        // Defense: prioritize what counters the incoming threat
+        score = { guards: 78, archers: 65 + enemyMelee * 8, knight: 88, giant: 18, commander: 82 }[cardId];
+        // Counter-pick bonus: archers shred melee attackers from range
+        if (cardId === 'archers' && enemyMelee > enemyRanged) score += 25;
+        // Knight charges through to reach backline archers
+        if (cardId === 'knight' && enemyRanged > 0) score += 20;
+      } else if (objective === 'center') {
+        score = { guards: 88, archers: 72, knight: 66, giant: 28, commander: 92 }[cardId];
+      } else {
+        // Offense: counter-pick based on enemy composition memory
+        score = { guards: 58, archers: 64, knight: 75, giant: 96, commander: 84 }[cardId];
+        // Giant bonus when enemy has few ranged (giant demolishes buildings)
+        if (cardId === 'giant' && !enemyProfile.rangedHeavy) score += 20;
+        // Knight bonus vs ranged-heavy enemies (charge eliminates archers)
+        if (cardId === 'knight' && enemyProfile.rangedHeavy) score += 30;
+        // Archers bonus vs melee-heavy (kite from range)
+        if (cardId === 'archers' && enemyProfile.meleeHeavy) score += 25;
+        // Guards bonus to absorb damage when enemy has siege
+        if (cardId === 'guards' && enemyProfile.siegePresent) score += 15;
+      }
+      const cost = CARDS_BY_ID[cardId].cost;
+      if (player.elixirMilli >= 25_000) score += cost * 3;
+      if (player.elixirMilli < 8_000) score -= cost * 2;
+      score += this.random.integer(7) - 3;
+      if (score > bestScore) { best = cardId; bestScore = score; }
+    }
+    return best;
+  }
+
   private analyzeTeamThreats(playerId: PlayerId): BotThreatSummary {
+
     const teamId = teamForPlayer(playerId);
     const summaries = this.castles
       .filter((castle) => castle.alive && teamForPlayer(castle.playerId) === teamId)
@@ -824,6 +1260,25 @@ export class GameSimulation {
     }
     return false;
   }
+  private hasPendingAlliedSpellNear(
+    playerId: PlayerId,
+    cardId: SpellCardId,
+    destination: Vec2,
+  ): boolean {
+    const card = CARDS_BY_ID[cardId];
+    if (card.kind !== 'spell') return false;
+    return this.pendingSpells.some((pending) => {
+      if (pending.playerId === playerId || teamForPlayer(pending.playerId) !== teamForPlayer(playerId)) return false;
+      const pendingCard = CARDS_BY_ID[pending.cardId];
+      if (pendingCard.kind !== 'spell') return false;
+      const overlapRadius = Math.max(card.radius, pendingCard.radius);
+      return Math.hypot(
+        pending.destination.x - destination.x,
+        pending.destination.z - destination.z,
+      ) <= overlapRadius;
+    });
+  }
+
   private findBestFireballAim(
     playerId: PlayerId,
     candidates: readonly number[],
@@ -1037,8 +1492,8 @@ export class GameSimulation {
       if (this.entities.active[index] === 0) continue;
       this.entities.stateTick[index] = Math.min(65_535, this.entities.stateTick[index]! + 1);
       if (this.entities.state[index] === EntityStateCode.Death) {
-        this.updateMotionPhase(index, 14);
-        if (this.entities.stateTick[index]! >= 14) this.entities.remove(index);
+        this.updateMotionPhase(index, DEATH_PRESENTATION_TICKS);
+        if (this.entities.stateTick[index]! >= DEATH_PRESENTATION_TICKS) this.entities.remove(index);
         continue;
       }
 
@@ -1055,6 +1510,9 @@ export class GameSimulation {
         this.updateMotionPhase(index, cycleTicks);
       }
       if (this.entities.attackCooldown[index]! > 0) this.entities.attackCooldown[index] = this.entities.attackCooldown[index]! - 1;
+      if (this.entities.staggerImmunity[index]! > 0) {
+        this.entities.staggerImmunity[index] = this.entities.staggerImmunity[index]! - 1;
+      }
       if (this.entities.lifetime[index]! > 0) {
         this.entities.lifetime[index] = this.entities.lifetime[index]! - 1;
         if (this.entities.lifetime[index] === 0) { this.killEntity(index); continue; }
@@ -1063,6 +1521,17 @@ export class GameSimulation {
       if (this.entities.state[index] === EntityStateCode.Hit && this.entities.stateTick[index]! <= HIT_RECOVERY_TICKS) {
         this.updateMotionPhase(index, HIT_RECOVERY_TICKS);
         continue;
+      }
+      // A committed strike owns a brief recovery window. Keeping the attack
+      // state alive prevents foot sliding and animation pops when its target
+      // dies or leaves range exactly on the contact frame.
+      if (this.entities.state[index] === EntityStateCode.Attack) {
+        const recoveryTicks = Math.max(
+          MIN_ATTACK_RECOVERY_TICKS,
+          Math.floor((definition.attackCooldownTicks - definition.attackAnticipationTicks) * 0.35),
+        );
+        const ticksSinceContact = definition.attackCooldownTicks - this.entities.attackCooldown[index]!;
+        if (this.entities.attackCooldown[index]! > 0 && ticksSinceContact <= recoveryTicks) continue;
       }
 
       const owner = this.entities.owner[index] as PlayerId;
@@ -1079,8 +1548,12 @@ export class GameSimulation {
         }
         this.entities.targetId[index] = targetId;
         if (distance <= approach.effectiveRange + 1e-6) {
+          const facingTarget = this.turnEntityToward(index, Math.atan2(dx, dz));
+          if (!facingTarget) {
+            this.setEntityState(index, EntityStateCode.Idle);
+            continue;
+          }
           this.setEntityState(index, EntityStateCode.Attack);
-          this.entities.yaw[index] = Math.atan2(dx, dz);
           if (
             this.entities.attackCooldown[index]! <= 0
             && this.entities.stateTick[index]! >= definition.attackAnticipationTicks
@@ -1099,7 +1572,6 @@ export class GameSimulation {
               });
             }
             this.entities.attackCooldown[index] = definition.attackCooldownTicks;
-            this.entities.stateTick[index] = 0;
           }
           continue;
         }
@@ -1141,7 +1613,8 @@ export class GameSimulation {
       const route = this.routePaths[this.entities.routeIndex[index]!];
       if (!route || definition.kind !== 'unit') continue;
       const currentDistance = this.entities.routeDistance[index]!;
-      const atCenter = route.kind === 'center' && Math.abs(currentDistance - route.centerDistance) < 0.35;
+      const atCenter = route.kind === 'center'
+        && Math.abs(currentDistance - route.centerDistance) < CENTER_HOLD_DISTANCE;
       const teamControlsCenter = this.center.ownerPlayerId !== null && !this.isEnemyPlayer(owner, this.center.ownerPlayerId);
       if (atCenter && !teamControlsCenter) {
         this.setEntityState(index, EntityStateCode.Idle);
@@ -1152,8 +1625,15 @@ export class GameSimulation {
       if (currentDistance >= castleAttackDistance) {
         const castle = this.castles[route.destinationPlayerId];
         if (castle?.alive && this.isEnemyPlayer(owner, castle.playerId)) {
+          const facingCastle = this.turnEntityToward(
+            index,
+            Math.atan2(castle.x - this.entities.x[index]!, castle.z - this.entities.z[index]!),
+          );
+          if (!facingCastle) {
+            this.setEntityState(index, EntityStateCode.Idle);
+            continue;
+          }
           this.setEntityState(index, EntityStateCode.Attack);
-          this.entities.yaw[index] = Math.atan2(castle.x - this.entities.x[index]!, castle.z - this.entities.z[index]!);
           if (
             this.entities.attackCooldown[index]! <= 0
             && this.entities.stateTick[index]! >= definition.attackAnticipationTicks
@@ -1170,7 +1650,6 @@ export class GameSimulation {
               });
             }
             this.entities.attackCooldown[index] = definition.attackCooldownTicks;
-            this.entities.stateTick[index] = 0;
           }
         } else {
           this.retargetAtNode(index, route.destinationPlayerId);
@@ -1228,7 +1707,7 @@ export class GameSimulation {
         if (this.entities.hp[target] === 0) {
           this.killEntity(target);
         } else {
-          this.setEntityState(target, EntityStateCode.Hit);
+          this.applyHitReaction(target);
           this.retargetAfterPreparedDamage(
             target,
             validEntityIntents.slice(cursor, end).map((intent) => intent.sourceId),
@@ -1273,7 +1752,7 @@ export class GameSimulation {
   private consumeChargeOnImpact(sourceId: number): void {
     const source = this.entities.indexForId(sourceId);
     if (source >= 0 && this.entities.archetype[source] === ArchetypeCode.Knight) {
-      this.entities.chargeTicks[source] = 0;
+      this.entities.chargeDistanceMm[source] = 0;
     }
   }
 
@@ -1312,6 +1791,22 @@ export class GameSimulation {
     this.entities.motionPhase[index] = Math.round((this.entities.stateTick[index]! % cycle) / cycle * 65_535);
   }
 
+  /** Turns through the shortest deterministic arc and reports entry into the legal attack cone. */
+  private turnEntityToward(index: number, desiredYaw: number): boolean {
+    const fullTurn = Math.PI * 2;
+    const normalize = (angle: number) => {
+      const wrapped = (angle + Math.PI) % fullTurn;
+      return (wrapped < 0 ? wrapped + fullTurn : wrapped) - Math.PI;
+    };
+    const delta = normalize(desiredYaw - this.entities.yaw[index]!);
+    const applied = Math.max(
+      -COMBAT_TURN_RADIANS_PER_TICK,
+      Math.min(COMBAT_TURN_RADIANS_PER_TICK, delta),
+    );
+    this.entities.yaw[index] = normalize(this.entities.yaw[index]! + applied);
+    return Math.abs(normalize(desiredYaw - this.entities.yaw[index]!)) <= ATTACK_ARC_HALF_ANGLE;
+  }
+
   private advanceUnitOnRoute(index: number, requestedDistance: number, spatial: Map<string, number[]>): void {
     const routeIndex = this.entities.routeIndex[index]!;
     const route = this.routePaths[routeIndex];
@@ -1328,19 +1823,44 @@ export class GameSimulation {
       ) continue;
       const sameTeam = teamForPlayer(this.entities.owner[candidate] as PlayerId)
         === teamForPlayer(this.entities.owner[index] as PlayerId);
-      const gap = definition.physicalRadius + this.definitionAt(candidate).physicalRadius + BODY_CLEARANCE;
+      const candidateDefinition = this.definitionAt(candidate);
+      const gap = definition.physicalRadius + candidateDefinition.physicalRadius + BODY_CLEARANCE;
       if (sameTeam) {
-        if (this.entities.routeIndex[candidate] !== routeIndex) continue;
-        const candidateDistance = this.entities.routeDistance[candidate]!;
-        const candidateIsAhead = candidateDistance > currentDistance + 0.001
-          || (Math.abs(candidateDistance - currentDistance) <= 0.001 && this.entities.id[candidate]! < this.entities.id[index]!);
-        if (candidateIsAhead) nextDistance = Math.min(nextDistance, candidateDistance - gap);
-        continue;
+        if (this.entities.routeIndex[candidate] === routeIndex) {
+          const candidateDistance = this.entities.routeDistance[candidate]!;
+          const candidateIsAhead = candidateDistance > currentDistance + 0.001
+            || (Math.abs(candidateDistance - currentDistance) <= 0.001 && this.entities.id[candidate]! < this.entities.id[index]!);
+          if (candidateIsAhead) nextDistance = Math.min(nextDistance, candidateDistance - gap);
+          continue;
+        }
+        // Allied crossing routes use entity id as deterministic right of way:
+        // the older formation keeps moving and the newer one yields on its
+        // own centerline. This prevents overlap without lateral displacement
+        // or a symmetric deadlock at the neutral junction.
+        if (this.entities.id[index]! < this.entities.id[candidate]!) continue;
+
+        const candidateRoute = this.routePaths[this.entities.routeIndex[candidate]!];
+        if (route.kind === 'center' && candidateRoute?.kind === 'center') {
+          // Reserve the entire junction before either body reaches it. Merely
+          // reacting to the priority unit's current position is too late: the
+          // yielding unit cannot reverse when the required clearance grows on
+          // the following tick. The older formation owns the intersection
+          // until its complete body has cleared the turn.
+          const candidateDistance = this.entities.routeDistance[candidate]!;
+          const candidateCleared = candidateDistance >= candidateRoute.centerDistance + gap;
+          if (currentDistance <= route.centerDistance + 0.001 && !candidateCleared) {
+            const holdDistance = Math.max(
+              currentDistance,
+              route.centerDistance - gap,
+            );
+            nextDistance = Math.min(nextDistance, holdDistance);
+            continue;
+          }
+        }
       }
 
-      // Opponents using reverse or crossing routes do not share routeIndex.
-      // Project them onto this unit's own centerline and reserve enough
-      // longitudinal room that their physical bodies can never pass through.
+      // Crossing routes are projected onto this unit's own centerline and
+      // reserve enough longitudinal room that physical bodies cannot overlap.
       const crossing = nearestOnRoutePath(
         route,
         { x: this.entities.x[candidate]!, z: this.entities.z[candidate]! },
@@ -1361,7 +1881,11 @@ export class GameSimulation {
     this.entities.yaw[index] = sample.yaw;
     if (travelled > 0) {
       if (this.entities.archetype[index] === ArchetypeCode.Knight) {
-        this.entities.chargeTicks[index] = Math.min(65_535, this.entities.chargeTicks[index]! + 1);
+        const travelledMillimeters = Math.max(0, Math.round(travelled * 1_000));
+        this.entities.chargeDistanceMm[index] = Math.min(
+          65_535,
+          this.entities.chargeDistanceMm[index]! + travelledMillimeters,
+        );
       }
       const stride = Math.max(0.45, definition.height * 0.55);
       const phaseDelta = Math.round(travelled / stride * 65_535);
@@ -1673,7 +2197,7 @@ export class GameSimulation {
   private attackDamage(index: number, target: number, definition: CombatDefinition): number {
     if (
       this.entities.archetype[index] === ArchetypeCode.Knight
-      && this.entities.chargeTicks[index]! >= KNIGHT_CHARGE_MIN_TICKS
+      && this.entities.chargeDistanceMm[index]! >= KNIGHT_CHARGE_MIN_DISTANCE_MM
       && (target < 0 || this.entities.kind[target] === EntityKindCode.Unit || this.entities.kind[target] === EntityKindCode.Building)
     ) {
       return Math.round(definition.damage * KNIGHT_CHARGE_DAMAGE_BPS / 10_000);
@@ -1776,7 +2300,7 @@ export class GameSimulation {
       return;
     }
 
-    this.setEntityState(index, EntityStateCode.Hit);
+    this.applyHitReaction(index);
     const source = sourceId > 0 ? this.entities.indexForId(sourceId) : -1;
     if (source < 0 || !this.isLivingEnemy(source, this.entities.owner[index] as PlayerId)) return;
     const current = this.entities.indexForId(this.entities.targetId[index]!);
@@ -1787,6 +2311,15 @@ export class GameSimulation {
     if (definition.targetPriority !== 'buildings' || !currentIsPriorityBuilding) {
       this.entities.targetId[index] = sourceId;
     }
+  }
+
+  private applyHitReaction(index: number): void {
+    // Dense ranged volleys and multi-unit surrounds still deal every point of
+    // damage, but cannot permanently stun-lock a formation by restarting the
+    // same hit clip every tick.
+    if (this.entities.staggerImmunity[index]! > 0) return;
+    this.setEntityState(index, EntityStateCode.Hit);
+    this.entities.staggerImmunity[index] = HIT_STAGGER_IMMUNITY_TICKS;
   }
 
   private killEntity(index: number): void {
@@ -1812,7 +2345,7 @@ export class GameSimulation {
     if (
       state === EntityStateCode.Death
       || state === EntityStateCode.Spawn
-    ) this.entities.chargeTicks[index] = 0;
+    ) this.entities.chargeDistanceMm[index] = 0;
   }
 
   private isEnemyPlayer(left: PlayerId, right: PlayerId): boolean {
@@ -2027,6 +2560,14 @@ export class GameSimulation {
       add(tactics.fireballCast ? 1 : 0);
       add(tactics.chainLightningCast ? 1 : 0);
       add(tactics.supportWaves);
+      // Enhanced AI state
+      add(tactics.savingStartTick);
+      add(tactics.savingForPush ? 1 : 0);
+      add(tactics.lastPushTick);
+      addString(tactics.lastPushRouteId ?? '');
+      add(tactics.sameLanePushCount);
+      add(tactics.recentEnemyArchetypes.length);
+      for (const arch of tactics.recentEnemyArchetypes) add(arch);
     }
 
     // Pool-slot occupancy is future-determining because the first free slot is
@@ -2052,7 +2593,8 @@ export class GameSimulation {
       addFloat(this.entities.routeDistance[index]!);
       addFloat(this.entities.laneOffset[index]!);
       add(this.entities.attackCooldown[index]!);
-      add(this.entities.chargeTicks[index]!);
+      add(this.entities.staggerImmunity[index]!);
+      add(this.entities.chargeDistanceMm[index]!);
       add(this.entities.lifetime[index]!);
       add(this.entities.cardCost[index]!);
     }

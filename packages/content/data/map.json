@@ -1,5 +1,5 @@
 {
-  "version": "five-meter-centerlines-radius-60-2",
+  "version": "insect-root-network-radius-60-2v2-1",
   "nodes": [
     { "id": "north", "kind": "kingdom", "playerId": 0, "position": { "x": 0, "z": -60 } },
     { "id": "east", "kind": "kingdom", "playerId": 1, "position": { "x": 60, "z": 0 } },
@@ -24,22 +24,22 @@
   "routes": [
     { "id": "p0_outer_w", "playerId": 0, "kind": "direct", "destinationPlayerId": 3, "steps": [{"laneId":"outer_nw","reverse":true}] },
     { "id": "p0_inner_w", "playerId": 0, "kind": "direct", "destinationPlayerId": 3, "steps": [{"laneId":"inner_nw","reverse":true}] },
-    { "id": "p0_center", "playerId": 0, "kind": "center", "destinationPlayerId": 2, "steps": [{"laneId":"radial_n","reverse":false},{"laneId":"radial_s","reverse":true}] },
+    { "id": "p0_center", "playerId": 0, "kind": "center", "destinationPlayerId": 1, "steps": [{"laneId":"radial_n","reverse":false},{"laneId":"radial_e","reverse":true}] },
     { "id": "p0_inner_e", "playerId": 0, "kind": "direct", "destinationPlayerId": 1, "steps": [{"laneId":"inner_ne","reverse":false}] },
     { "id": "p0_outer_e", "playerId": 0, "kind": "direct", "destinationPlayerId": 1, "steps": [{"laneId":"outer_ne","reverse":false}] },
     { "id": "p1_outer_n", "playerId": 1, "kind": "direct", "destinationPlayerId": 0, "steps": [{"laneId":"outer_ne","reverse":true}] },
     { "id": "p1_inner_n", "playerId": 1, "kind": "direct", "destinationPlayerId": 0, "steps": [{"laneId":"inner_ne","reverse":true}] },
-    { "id": "p1_center", "playerId": 1, "kind": "center", "destinationPlayerId": 3, "steps": [{"laneId":"radial_e","reverse":false},{"laneId":"radial_w","reverse":true}] },
+    { "id": "p1_center", "playerId": 1, "kind": "center", "destinationPlayerId": 2, "steps": [{"laneId":"radial_e","reverse":false},{"laneId":"radial_s","reverse":true}] },
     { "id": "p1_inner_s", "playerId": 1, "kind": "direct", "destinationPlayerId": 2, "steps": [{"laneId":"inner_se","reverse":false}] },
     { "id": "p1_outer_s", "playerId": 1, "kind": "direct", "destinationPlayerId": 2, "steps": [{"laneId":"outer_se","reverse":false}] },
     { "id": "p2_outer_e", "playerId": 2, "kind": "direct", "destinationPlayerId": 1, "steps": [{"laneId":"outer_se","reverse":true}] },
     { "id": "p2_inner_e", "playerId": 2, "kind": "direct", "destinationPlayerId": 1, "steps": [{"laneId":"inner_se","reverse":true}] },
-    { "id": "p2_center", "playerId": 2, "kind": "center", "destinationPlayerId": 0, "steps": [{"laneId":"radial_s","reverse":false},{"laneId":"radial_n","reverse":true}] },
+    { "id": "p2_center", "playerId": 2, "kind": "center", "destinationPlayerId": 3, "steps": [{"laneId":"radial_s","reverse":false},{"laneId":"radial_w","reverse":true}] },
     { "id": "p2_inner_w", "playerId": 2, "kind": "direct", "destinationPlayerId": 3, "steps": [{"laneId":"inner_sw","reverse":false}] },
     { "id": "p2_outer_w", "playerId": 2, "kind": "direct", "destinationPlayerId": 3, "steps": [{"laneId":"outer_sw","reverse":false}] },
     { "id": "p3_outer_s", "playerId": 3, "kind": "direct", "destinationPlayerId": 2, "steps": [{"laneId":"outer_sw","reverse":true}] },
     { "id": "p3_inner_s", "playerId": 3, "kind": "direct", "destinationPlayerId": 2, "steps": [{"laneId":"inner_sw","reverse":true}] },
-    { "id": "p3_center", "playerId": 3, "kind": "center", "destinationPlayerId": 1, "steps": [{"laneId":"radial_w","reverse":false},{"laneId":"radial_e","reverse":true}] },
+    { "id": "p3_center", "playerId": 3, "kind": "center", "destinationPlayerId": 0, "steps": [{"laneId":"radial_w","reverse":false},{"laneId":"radial_n","reverse":true}] },
     { "id": "p3_inner_n", "playerId": 3, "kind": "direct", "destinationPlayerId": 0, "steps": [{"laneId":"inner_nw","reverse":false}] },
     { "id": "p3_outer_n", "playerId": 3, "kind": "direct", "destinationPlayerId": 0, "steps": [{"laneId":"outer_nw","reverse":false}] }
   ]

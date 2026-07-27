@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import terrainMapUrl from "../assets/terrain-map.png";
+import terrainMapUrl from "../assets/insect-terrain-map.png";
 import { FACTION_STYLES } from "./factions";
 import { validateTerrainImage } from "./terrainResource";
 import {
@@ -444,7 +444,7 @@ async function loadTerrainTexture(): Promise<THREE.Texture> {
   try {
     texture = await new THREE.TextureLoader().loadAsync(terrainMapUrl);
   } catch (cause) {
-    throw new Error("terrain-map.png could not be loaded.", { cause });
+    throw new Error("insect-terrain-map.png could not be loaded.", { cause });
   }
 
   try {
