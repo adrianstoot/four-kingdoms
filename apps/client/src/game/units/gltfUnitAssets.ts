@@ -2,7 +2,9 @@ import * as THREE from "three";
 import { GLTFLoader, type GLTF } from "three/addons/loaders/GLTFLoader.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { clone as cloneSkeleton } from "three/addons/utils/SkeletonUtils.js";
-import { FACTIONS, UNIT_ARCHETYPES, UNIT_METRICS, type UnitArchetype } from "../procedural";
+import {
+  FACTIONS, UNIT_ARCHETYPES, UNIT_METRICS, createToonMaterial, type UnitArchetype,
+} from "../procedural";
 
 export const UNIT_MOTIONS = ["idle", "walk", "attack", "hit", "death", "spawn"] as const;
 export type UnitMotion = (typeof UNIT_MOTIONS)[number];
@@ -101,9 +103,28 @@ const DEFAULT_CLIP_ALIASES: Readonly<Record<UnitMotion, readonly string[]>> = {
   walk: ["walk", "walking", "run", "locomotion", "caminar", "marcha", "trot"],
   attack: ["attack", "shoot", "bow", "arrow", "slash", "strike", "charge", "melee", "ataque", "disparo"],
   hit: ["hit", "hurt", "damage", "impact", "golpe", "herido"],
-  death: ["death", "die", "dying", "defeat", "muerte", "caer"],
+  death: ["death", "dead", "die", "dying", "defeat", "muerte", "caer"],
   spawn: ["spawn", "summon", "appear", "enter", "deploy", "invocar", "aparicion"],
 };
+
+/**
+ * Mass-battle assets are expanded to non-indexed geometry for the instanced
+ * animation frames. Reject unsuitable source art before that expansion can
+ * freeze a tab or consume hundreds of megabytes.
+ */
+const MAX_SINGLE_SOURCE_TRIANGLES = 40_000;
+const MAX_MOUNTED_SOURCE_TRIANGLES = 60_000;
+const MAX_SOURCE_GPU_BYTES = 96 * 1024 * 1024;
+const MAX_BAKED_GEOMETRY_BYTES = 128 * 1024 * 1024;
+const BAKED_BYTES_PER_TRIANGLE = 3 * 11 * Float32Array.BYTES_PER_ELEMENT;
+const MIN_VISIBLE_VERTEX_DELTA_SQ = 0.003 ** 2;
+const MIN_VISIBLE_RMS_DELTA_SQ = 0.0005 ** 2;
+const LOOPING_MOTIONS = new Set<UnitMotion>(["idle", "walk", "attack"]);
+
+class UnitAssetValidationError extends Error {
+  override name = "UnitAssetValidationError";
+}
+
 
 const DEFAULT_TINT_MATERIALS = ["team", "faction", "accent", "primary", "blue"];
 const DEFAULT_FRAME_COUNTS: Readonly<Record<UnitMotion, number>> = {
@@ -119,6 +140,15 @@ function normalizedName(value: string): string {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function isExportHelperMesh(object: THREE.Object3D): boolean {
+  const name = normalizedName(object.name);
+  return name === "icosphere" || name.startsWith("icosphere ");
+}
+
+function isRenderableUnitMesh(object: THREE.Object3D): object is THREE.Mesh {
+  return object instanceof THREE.Mesh && object.visible && !isExportHelperMesh(object);
+}
+
 function stringList(value: string | string[] | undefined): readonly string[] {
   return typeof value === "string" ? [value] : Array.isArray(value) ? value : [];
 }
@@ -127,8 +157,190 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function hasAssetUrl(value: unknown): value is { url: string } {
-  return isRecord(value) && typeof value.url === "string" && value.url.trim().length > 0;
+function manifestError(path: string, message: string): never {
+  throw new UnitAssetValidationError(`Invalid unit asset manifest at ${path}: ${message}`);
+}
+
+function assertKnownKeys(value: Record<string, unknown>, allowed: readonly string[], path: string): void {
+  const allowedKeys = new Set(allowed);
+  const unexpected = Object.keys(value).filter((key) => !allowedKeys.has(key));
+  if (unexpected.length > 0) manifestError(path, `unexpected field(s): ${unexpected.join(", ")}.`);
+}
+
+function nonEmptyString(value: unknown, path: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) manifestError(path, "expected a non-empty string.");
+  const trimmed = value.trim();
+  if (trimmed.length > 2_048 || /[\u0000-\u001f]/.test(trimmed)) {
+    manifestError(path, "contains control characters or is longer than 2048 characters.");
+  }
+  return trimmed;
+}
+
+function parseStringChoice(value: unknown, path: string): string | string[] {
+  if (typeof value === "string") return nonEmptyString(value, path);
+  if (!Array.isArray(value) || value.length === 0) {
+    return manifestError(path, "expected a string or a non-empty string array.");
+  }
+  const unique = [...new Set(value.map((item, index) => nonEmptyString(item, `${path}[${index}]`)))];
+  if (unique.length > 16) manifestError(path, "contains more than 16 alternatives.");
+  return unique;
+}
+
+function parseMotionMap(
+  value: unknown,
+  path: string,
+): Partial<Record<UnitMotion, string | string[]>> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return manifestError(path, "expected an object keyed by motion.");
+  assertKnownKeys(value, UNIT_MOTIONS, path);
+  const parsed: Partial<Record<UnitMotion, string | string[]>> = {};
+  for (const motion of UNIT_MOTIONS) {
+    if (value[motion] !== undefined) parsed[motion] = parseStringChoice(value[motion], `${path}.${motion}`);
+  }
+  return parsed;
+}
+
+function parseForwardAxis(value: unknown, path: string): UnitForwardAxis | undefined {
+  if (value === undefined) return undefined;
+  if (value === "+z" || value === "-z" || value === "+x" || value === "-x") return value;
+  return manifestError(path, 'expected one of "+z", "-z", "+x" or "-x".');
+}
+
+function parsePositiveScale(
+  value: unknown,
+  path: string,
+): number | [number, number, number] | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+  if (
+    Array.isArray(value)
+    && value.length === 3
+    && value.every((item) => typeof item === "number" && Number.isFinite(item) && item > 0)
+  ) {
+    return [value[0] as number, value[1] as number, value[2] as number];
+  }
+  return manifestError(path, "expected a positive number or three positive finite numbers.");
+}
+
+function parseFiniteTriple(value: unknown, path: string): [number, number, number] | undefined {
+  if (value === undefined) return undefined;
+  if (
+    Array.isArray(value)
+    && value.length === 3
+    && value.every((item) => typeof item === "number" && Number.isFinite(item))
+  ) {
+    return [value[0] as number, value[1] as number, value[2] as number];
+  }
+  return manifestError(path, "expected exactly three finite numbers.");
+}
+
+function parseSampleFrames(
+  value: unknown,
+  path: string,
+): number | Partial<Record<UnitMotion, number>> | undefined {
+  if (value === undefined) return undefined;
+  const parseCount = (candidate: unknown, candidatePath: string): number => {
+    if (!Number.isInteger(candidate) || (candidate as number) < 2 || (candidate as number) > 12) {
+      return manifestError(candidatePath, "expected an integer from 2 to 12.");
+    }
+    return candidate as number;
+  };
+  if (typeof value === "number") return parseCount(value, path);
+  if (!isRecord(value)) return manifestError(path, "expected a frame count or an object keyed by motion.");
+  assertKnownKeys(value, UNIT_MOTIONS, path);
+  const parsed: Partial<Record<UnitMotion, number>> = {};
+  for (const motion of UNIT_MOTIONS) {
+    if (value[motion] !== undefined) parsed[motion] = parseCount(value[motion], `${path}.${motion}`);
+  }
+  return parsed;
+}
+
+function parseTintMaterials(value: unknown, path: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0 || value.length > 32) {
+    return manifestError(path, "expected between 1 and 32 material-name fragments.");
+  }
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (let index = 0; index < value.length; index += 1) {
+    const item = nonEmptyString(value[index], `${path}[${index}]`);
+    const normalized = normalizedName(item);
+    if (!seen.has(normalized)) {
+      result.push(item);
+      seen.add(normalized);
+    }
+  }
+  return result;
+}
+
+function parseAnimationSource(
+  value: Record<string, unknown>,
+  path: string,
+  allowScale: boolean,
+): UnitAnimationSourceManifest & { scale?: number | [number, number, number] } {
+  return {
+    animationUrls: parseMotionMap(value.animationUrls, `${path}.animationUrls`),
+    clips: parseMotionMap(value.clips, `${path}.clips`),
+    forwardAxis: parseForwardAxis(value.forwardAxis, `${path}.forwardAxis`),
+    scale: allowScale ? parsePositiveScale(value.scale, `${path}.scale`) : undefined,
+  };
+}
+
+function parseSingleEntry(value: Record<string, unknown>, path: string): SingleUnitAssetManifestEntry {
+  assertKnownKeys(
+    value,
+    ["type", "url", "animationUrls", "clips", "forwardAxis", "sampleFrames", "tintMaterials"],
+    path,
+  );
+  if (value.type !== undefined && value.type !== "single") manifestError(`${path}.type`, 'expected "single".');
+  const animation = parseAnimationSource(value, path, false);
+  return {
+    type: value.type === "single" ? "single" : undefined,
+    url: nonEmptyString(value.url, `${path}.url`),
+    animationUrls: animation.animationUrls,
+    clips: animation.clips,
+    forwardAxis: animation.forwardAxis,
+    sampleFrames: parseSampleFrames(value.sampleFrames, `${path}.sampleFrames`),
+    tintMaterials: parseTintMaterials(value.tintMaterials, `${path}.tintMaterials`),
+  };
+}
+
+function parseMountedPart(value: unknown, path: string): MountedUnitPartManifestEntry {
+  if (!isRecord(value)) return manifestError(path, "expected an object.");
+  assertKnownKeys(value, ["url", "animationUrls", "clips", "forwardAxis", "scale"], path);
+  const animation = parseAnimationSource(value, path, true);
+  return {
+    url: nonEmptyString(value.url, `${path}.url`),
+    animationUrls: animation.animationUrls,
+    clips: animation.clips,
+    forwardAxis: animation.forwardAxis,
+    scale: animation.scale,
+  };
+}
+
+function parseRiderSocket(value: unknown, path: string): RiderSocketManifest | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return manifestError(path, "expected an object.");
+  assertKnownKeys(value, ["bone", "position", "rotationDegrees", "scale"], path);
+  return {
+    bone: value.bone === undefined ? undefined : parseStringChoice(value.bone, `${path}.bone`),
+    position: parseFiniteTriple(value.position, `${path}.position`),
+    rotationDegrees: parseFiniteTriple(value.rotationDegrees, `${path}.rotationDegrees`),
+    scale: parsePositiveScale(value.scale, `${path}.scale`),
+  };
+}
+
+function parseMountedEntry(value: Record<string, unknown>, path: string): MountedUnitAssetManifestEntry {
+  assertKnownKeys(value, ["type", "horse", "rider", "riderSocket", "sampleFrames", "tintMaterials"], path);
+  if (value.type !== "mounted") manifestError(`${path}.type`, 'expected "mounted".');
+  return {
+    type: "mounted",
+    horse: parseMountedPart(value.horse, `${path}.horse`),
+    rider: parseMountedPart(value.rider, `${path}.rider`),
+    riderSocket: parseRiderSocket(value.riderSocket, `${path}.riderSocket`),
+    sampleFrames: parseSampleFrames(value.sampleFrames, `${path}.sampleFrames`),
+    tintMaterials: parseTintMaterials(value.tintMaterials, `${path}.tintMaterials`),
+  };
 }
 
 function isMountedEntry(entry: UnitAssetManifestEntry): entry is MountedUnitAssetManifestEntry {
@@ -136,45 +348,88 @@ function isMountedEntry(entry: UnitAssetManifestEntry): entry is MountedUnitAsse
 }
 
 function parseManifest(value: unknown): UnitAssetManifest {
-  if (!isRecord(value) || value.version !== 1 || !isRecord(value.units)) {
-    throw new Error("Invalid unit asset manifest; expected { version: 1, units: {...} }.");
-  }
+  if (!isRecord(value)) manifestError("$", "expected an object.");
+  assertKnownKeys(value, ["version", "units"], "$");
+  if (value.version !== 1) manifestError("$.version", "expected 1.");
+  if (!isRecord(value.units)) manifestError("$.units", "expected an object.");
+  const knownArchetypes = new Set<string>(UNIT_ARCHETYPES);
+  const unknown = Object.keys(value.units).filter((key) => !knownArchetypes.has(key));
+  if (unknown.length > 0) manifestError("$.units", `unknown archetype(s): ${unknown.join(", ")}.`);
+
   const units: Partial<Record<UnitArchetype, UnitAssetManifestEntry>> = {};
   for (const archetype of UNIT_ARCHETYPES) {
     const raw = value.units[archetype];
     if (raw === undefined) continue;
-    if (!isRecord(raw)) throw new Error(`Invalid GLB entry for ${archetype}.`);
+    if (!isRecord(raw)) manifestError(`$.units.${archetype}`, "expected an object.");
     if (raw.type === "mounted") {
-      if (archetype !== "knight" || !hasAssetUrl(raw.horse) || !hasAssetUrl(raw.rider)) {
-        throw new Error("A mounted composite is only valid for knight and requires horse.url plus rider.url.");
+      if (archetype !== "knight") {
+        manifestError(`$.units.${archetype}.type`, "mounted composites are only supported for knight.");
       }
-      units[archetype] = raw as unknown as MountedUnitAssetManifestEntry;
-      continue;
+      units[archetype] = parseMountedEntry(raw, `$.units.${archetype}`);
+    } else {
+      units[archetype] = parseSingleEntry(raw, `$.units.${archetype}`);
     }
-    if ((raw.type !== undefined && raw.type !== "single") || !hasAssetUrl(raw)) {
-      throw new Error(`Invalid GLB entry for ${archetype}.`);
-    }
-    units[archetype] = raw as unknown as SingleUnitAssetManifestEntry;
   }
   return { version: 1, units };
 }
 
-async function fetchManifest(url: string): Promise<UnitAssetManifest | null> {
+interface ManifestFetchResult {
+  manifest: UnitAssetManifest | null;
+  error: Error | null;
+}
+
+async function fetchManifest(url: string): Promise<ManifestFetchResult> {
   try {
     const response = await fetch(url, { cache: "no-cache" });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      if (response.status === 404) return { manifest: null, error: null };
+      return {
+        manifest: null,
+        error: new UnitAssetValidationError(`Unit asset manifest request failed with HTTP ${response.status}.`),
+      };
+    }
     const contentType = response.headers.get("content-type") ?? "";
-    if (!contentType.includes("json")) return null;
-    return parseManifest(await response.json());
-  } catch {
-    return null;
+    if (!contentType.toLowerCase().includes("json")) {
+      return {
+        manifest: null,
+        error: new UnitAssetValidationError(
+          `Unit asset manifest must be JSON; received ${contentType || "an unknown content type"}.`,
+        ),
+      };
+    }
+    return { manifest: parseManifest(await response.json()), error: null };
+  } catch (error) {
+    return {
+      manifest: null,
+      error: error instanceof Error ? error : new UnitAssetValidationError(String(error)),
+    };
   }
 }
 
 function resolveUrl(url: string, relativeTo: string): string {
   const documentUrl = typeof window !== "undefined" ? window.location.href : "http://localhost/";
   const absoluteBase = new URL(relativeTo, documentUrl);
-  return new URL(url, absoluteBase).href;
+  const resolved = new URL(url, absoluteBase);
+  if (resolved.protocol !== "http:" && resolved.protocol !== "https:" && resolved.protocol !== "blob:") {
+    throw new UnitAssetValidationError(`Unsupported unit asset URL protocol: ${resolved.protocol}`);
+  }
+  return resolved.href;
+}
+
+function findNamedClip(
+  clips: readonly THREE.AnimationClip[],
+  names: readonly string[],
+): THREE.AnimationClip | null {
+  const normalized = names.map(normalizedName);
+  for (const name of normalized) {
+    const exact = clips.find((clip) => normalizedName(clip.name) === name);
+    if (exact) return exact;
+  }
+  for (const name of normalized) {
+    const partial = clips.find((clip) => normalizedName(clip.name).includes(name));
+    if (partial) return partial;
+  }
+  return null;
 }
 
 function chooseClip(
@@ -182,17 +437,8 @@ function chooseClip(
   clips: readonly THREE.AnimationClip[],
   configured: string | string[] | undefined,
 ): THREE.AnimationClip | null {
-  const requested = stringList(configured).map(normalizedName);
-  const aliases = [...requested, ...DEFAULT_CLIP_ALIASES[motion]];
-  for (const alias of aliases) {
-    const exact = clips.find((clip) => normalizedName(clip.name) === alias);
-    if (exact) return exact;
-  }
-  for (const alias of aliases) {
-    const partial = clips.find((clip) => normalizedName(clip.name).includes(alias));
-    if (partial) return partial;
-  }
-  return null;
+  const requested = stringList(configured);
+  return findNamedClip(clips, requested.length > 0 ? requested : DEFAULT_CLIP_ALIASES[motion]);
 }
 
 function frameCount(entry: UnitAssetManifestEntry, motion: UnitMotion, hasClip: boolean): number {
@@ -200,6 +446,151 @@ function frameCount(entry: UnitAssetManifestEntry, motion: UnitMotion, hasClip: 
   const configured = typeof entry.sampleFrames === "number" ? entry.sampleFrames : entry.sampleFrames?.[motion];
   return THREE.MathUtils.clamp(Math.trunc(configured ?? DEFAULT_FRAME_COUNTS[motion]), 2, 12);
 }
+
+interface SourceAssetStats {
+  renderedTriangles: number;
+  sourceBytes: number;
+}
+
+function arrayBufferByteLength(attribute: THREE.BufferAttribute | THREE.InterleavedBufferAttribute): number {
+  const array = attribute instanceof THREE.InterleavedBufferAttribute
+    ? attribute.data.array
+    : attribute.array;
+  return array.byteLength;
+}
+
+function textureMemoryBytes(texture: THREE.Texture): number {
+  const mipmaps = texture.mipmaps as Array<{ data?: ArrayBufferView }> | undefined;
+  if (mipmaps && mipmaps.length > 0) {
+    return mipmaps.reduce((total, mip) => total + (mip.data?.byteLength ?? 0), 0);
+  }
+  const image = texture.image as {
+    width?: number;
+    height?: number;
+    naturalWidth?: number;
+    naturalHeight?: number;
+  } | undefined;
+  const width = image?.width ?? image?.naturalWidth ?? 0;
+  const height = image?.height ?? image?.naturalHeight ?? 0;
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return 0;
+  return Math.ceil(width * height * 4 * 4 / 3);
+}
+
+function inspectSourceAssets(roots: readonly THREE.Object3D[]): SourceAssetStats {
+  let renderedTriangles = 0;
+  let sourceBytes = 0;
+  const measuredGeometries = new Set<THREE.BufferGeometry>();
+  const measuredTextures = new Set<THREE.Texture>();
+  for (const root of roots) {
+    root.traverse((object) => {
+      if (!isRenderableUnitMesh(object)) return;
+      const geometry = object.geometry;
+      const position = geometry.getAttribute("position");
+      if (!position || position.itemSize < 3 || position.count < 3) {
+        throw new UnitAssetValidationError(`Visible mesh "${object.name || "(unnamed)"}" has no valid position attribute.`);
+      }
+      const elementCount = geometry.index?.count ?? position.count;
+      renderedTriangles += Math.floor(elementCount / 3);
+      if (!measuredGeometries.has(geometry)) {
+        measuredGeometries.add(geometry);
+        const measuredBuffers = new Set<ArrayBufferLike>();
+        const attributes = Object.values(geometry.attributes) as Array<
+          THREE.BufferAttribute | THREE.InterleavedBufferAttribute
+        >;
+        for (const attribute of attributes) {
+          const array = attribute instanceof THREE.InterleavedBufferAttribute
+            ? attribute.data.array
+            : attribute.array;
+          if (!measuredBuffers.has(array.buffer)) {
+            sourceBytes += array.buffer.byteLength;
+            measuredBuffers.add(array.buffer);
+          }
+        }
+        if (geometry.index && !measuredBuffers.has(geometry.index.array.buffer)) {
+          sourceBytes += geometry.index.array.byteLength;
+        }
+      }
+      for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+        for (const candidate of Object.values(material)) {
+          if (candidate instanceof THREE.Texture && !measuredTextures.has(candidate)) {
+            measuredTextures.add(candidate);
+            sourceBytes += textureMemoryBytes(candidate);
+          }
+        }
+      }
+    });
+  }
+  return { renderedTriangles, sourceBytes };
+}
+
+function formatMebibytes(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function assertSourceBudget(
+  label: string,
+  roots: readonly THREE.Object3D[],
+  maxTriangles: number,
+): SourceAssetStats {
+  const stats = inspectSourceAssets(roots);
+  if (stats.renderedTriangles <= 0) {
+    throw new UnitAssetValidationError(`${label} contains no visible triangles.`);
+  }
+  if (stats.renderedTriangles > maxTriangles) {
+    throw new UnitAssetValidationError(
+      `${label} has ${stats.renderedTriangles.toLocaleString("en-US")} rendered triangles; `
+      + `the mass-battle limit is ${maxTriangles.toLocaleString("en-US")}. Optimize or decimate the GLB first.`,
+    );
+  }
+  if (stats.sourceBytes > MAX_SOURCE_GPU_BYTES) {
+    throw new UnitAssetValidationError(
+      `${label} needs approximately ${formatMebibytes(stats.sourceBytes)} of source geometry/textures; `
+      + `the limit is ${formatMebibytes(MAX_SOURCE_GPU_BYTES)}.`,
+    );
+  }
+  return stats;
+}
+
+function predictedFrameCount(
+  entry: UnitAssetManifestEntry,
+  clips: ReadonlyMap<UnitMotion, THREE.AnimationClip>,
+): number {
+  let total = 0;
+  let missingMotion = false;
+  const sampled = new Map<THREE.AnimationClip, Set<number>>();
+  for (const motion of UNIT_MOTIONS) {
+    const clip = clips.get(motion);
+    if (!clip) {
+      missingMotion = true;
+      continue;
+    }
+    const count = frameCount(entry, motion, true);
+    const cacheKey = LOOPING_MOTIONS.has(motion) ? count : -count;
+    const counts = sampled.get(clip) ?? new Set<number>();
+    if (!counts.has(cacheKey)) {
+      total += count;
+      counts.add(cacheKey);
+      sampled.set(clip, counts);
+    }
+  }
+  if (missingMotion && !clips.has("idle")) total += 1;
+  return Math.max(1, total);
+}
+
+function assertBakedBudget(
+  label: string,
+  renderedTriangles: number,
+  uniqueFrameCount: number,
+): void {
+  const estimated = renderedTriangles * BAKED_BYTES_PER_TRIANGLE * uniqueFrameCount;
+  if (estimated > MAX_BAKED_GEOMETRY_BYTES) {
+    throw new UnitAssetValidationError(
+      `${label} would bake about ${formatMebibytes(estimated)} across ${uniqueFrameCount} animation frames; `
+      + `the per-unit limit is ${formatMebibytes(MAX_BAKED_GEOMETRY_BYTES)}. Reduce triangles or sampleFrames.`,
+    );
+  }
+}
+
 
 function ensureFloatAttribute(
   geometry: THREE.BufferGeometry,
@@ -281,7 +672,7 @@ function bakeScene(scene: THREE.Group): BakedScene {
   const primitives: THREE.BufferGeometry[] = [];
   const materials: THREE.Material[] = [];
   scene.traverse((object) => {
-    if (!(object instanceof THREE.Mesh) || !object.visible) return;
+    if (!isRenderableUnitMesh(object)) return;
     const baked = bakeMesh(object);
     const meshMaterials = Array.isArray(object.material) ? object.material : [object.material];
     const groups = baked.groups.length > 0
@@ -334,14 +725,17 @@ function normalizeGeometry(
   geometry.computeBoundingSphere();
 }
 
-function sampleTimes(clip: THREE.AnimationClip | null, count: number): number[] {
+function sampleTimes(clip: THREE.AnimationClip | null, count: number, looping = false): number[] {
   if (!clip || count <= 1 || clip.duration <= 0) return [0];
-  return Array.from({ length: count }, (_, index) => clip.duration * index / (count - 1));
+  return samplePhases(count, looping).map((phase) => clip.duration * phase);
 }
 
-function samplePhases(count: number): number[] {
+function samplePhases(count: number, looping = false): number[] {
   if (count <= 1) return [0];
-  return Array.from({ length: count }, (_, index) => index / (count - 1));
+  // Omit the duplicated end pose in loops, otherwise three samples become
+  // bind/contact/bind and the unit looks frozen during most of its stride.
+  const divisor = looping ? count : count - 1;
+  return Array.from({ length: count }, (_, index) => index / divisor);
 }
 
 function materialList(materials: readonly THREE.Material[]): THREE.Material[] {
@@ -363,16 +757,33 @@ async function loadAnimationClips(
   loadGltf: (url: string) => Promise<GLTF>,
 ): Promise<SupplementalClips> {
   const all: THREE.AnimationClip[] = [];
+  const allSet = new Set<THREE.AnimationClip>();
   const preferred = new Map<UnitMotion, THREE.AnimationClip[]>();
+  const loadedByUrl = new Map<string, readonly THREE.AnimationClip[]>();
   for (const motion of UNIT_MOTIONS) {
-    for (const relativeUrl of stringList(entry.animationUrls?.[motion])) {
-      const animated = await loadGltf(resolveUrl(relativeUrl, manifestUrl));
-      all.push(...animated.animations);
-      const current = preferred.get(motion) ?? [];
-      current.push(...animated.animations);
-      preferred.set(motion, current);
-      disposeObject(animated.scene);
+    const motionClips: THREE.AnimationClip[] = [];
+    const urls = [...new Set(stringList(entry.animationUrls?.[motion]))];
+    for (const relativeUrl of urls) {
+      const url = resolveUrl(relativeUrl, manifestUrl);
+      let loaded = loadedByUrl.get(url);
+      if (!loaded) {
+        const animated = await loadGltf(url);
+        loaded = [...animated.animations];
+        disposeObject(animated.scene);
+        if (loaded.length === 0) {
+          throw new UnitAssetValidationError(`Supplemental animation ${url} contains no clips.`);
+        }
+        loadedByUrl.set(url, loaded);
+      }
+      for (const clip of loaded) {
+        motionClips.push(clip);
+        if (!allSet.has(clip)) {
+          allSet.add(clip);
+          all.push(clip);
+        }
+      }
     }
+    if (motionClips.length > 0) preferred.set(motion, motionClips);
   }
   return { all, preferred };
 }
@@ -385,15 +796,53 @@ function selectedClips(
   rawClips: THREE.AnimationClip[];
   clips: Map<UnitMotion, THREE.AnimationClip>;
 } {
-  const rawClips = [...base, ...supplemental.all];
+  const rawClips = [...new Set([...base, ...supplemental.all])];
   const clips = new Map<UnitMotion, THREE.AnimationClip>();
   for (const motion of UNIT_MOTIONS) {
-    const clip = chooseClip(motion, rawClips, entry.clips?.[motion])
-      ?? supplemental.preferred.get(motion)?.[0]
-      ?? null;
-    if (clip) clips.set(motion, clip);
+    const configured = entry.clips?.[motion];
+    const preferred = supplemental.preferred.get(motion) ?? [];
+    const clip = configured !== undefined
+      ? chooseClip(motion, rawClips, configured)
+      : preferred[0] ?? chooseClip(motion, rawClips, undefined);
+    if (configured !== undefined && !clip) {
+      throw new UnitAssetValidationError(
+        `Configured ${motion} clip not found: ${stringList(configured).join(", ")}.`,
+      );
+    }
+    if (clip) {
+      if (!Number.isFinite(clip.duration) || clip.duration <= 0 || clip.tracks.length === 0) {
+        throw new UnitAssetValidationError(
+          `Animation clip "${clip.name || "(unnamed)"}" for ${motion} has no usable duration or tracks.`,
+        );
+      }
+      clips.set(motion, clip);
+    }
   }
   return { rawClips, clips };
+}
+
+function assertClipTargetsScene(
+  root: THREE.Object3D,
+  clip: THREE.AnimationClip,
+  label: string,
+): void {
+  const hasTarget = clip.tracks.some((track) => {
+    try {
+      const parsed = THREE.PropertyBinding.parseTrackName(track.name);
+      if (parsed.objectName === "bones" && parsed.objectIndex) {
+        return THREE.PropertyBinding.findNode(root, parsed.objectIndex) !== null;
+      }
+      if (!parsed.nodeName || parsed.nodeName === ".") return true;
+      return THREE.PropertyBinding.findNode(root, parsed.nodeName) !== null;
+    } catch {
+      return false;
+    }
+  });
+  if (!hasTarget) {
+    throw new UnitAssetValidationError(
+      `${label} clip "${clip.name || "(unnamed)"}" does not target this model's rig or scene hierarchy.`,
+    );
+  }
 }
 
 function playClip(
@@ -495,7 +944,48 @@ function assembleMountedRig(
 }
 
 function disposeBakedFrames(frames: ReadonlyMap<UnitMotion, readonly BakedUnitFrame[]>): void {
-  for (const sampled of frames.values()) for (const frame of sampled) frame.geometry.dispose();
+  const geometries = new Set<THREE.BufferGeometry>();
+  for (const sampled of frames.values()) {
+    for (const frame of sampled) geometries.add(frame.geometry);
+  }
+  for (const geometry of geometries) geometry.dispose();
+}
+
+function framesContainDeformation(frames: readonly BakedUnitFrame[]): boolean {
+  const first = frames[0]?.geometry.getAttribute("position");
+  if (!first) return false;
+  for (let frameIndex = 1; frameIndex < frames.length; frameIndex += 1) {
+    const current = frames[frameIndex]?.geometry.getAttribute("position");
+    if (!current || current.count !== first.count || current.itemSize !== first.itemSize) return true;
+    let largestDeltaSq = 0;
+    let totalDeltaSq = 0;
+    for (let vertex = 0; vertex < first.count; vertex += 1) {
+      const dx = current.getX(vertex) - first.getX(vertex);
+      const dy = current.getY(vertex) - first.getY(vertex);
+      const dz = current.getZ(vertex) - first.getZ(vertex);
+      const deltaSq = dx * dx + dy * dy + dz * dz;
+      largestDeltaSq = Math.max(largestDeltaSq, deltaSq);
+      totalDeltaSq += deltaSq;
+    }
+    if (
+      largestDeltaSq >= MIN_VISIBLE_VERTEX_DELTA_SQ
+      && totalDeltaSq / Math.max(1, first.count) >= MIN_VISIBLE_RMS_DELTA_SQ
+    ) return true;
+  }
+  return false;
+}
+
+function assertFramesDeform(
+  label: string,
+  motion: UnitMotion,
+  clipNames: readonly string[],
+  frames: readonly BakedUnitFrame[],
+): void {
+  if (framesContainDeformation(frames)) return;
+  throw new UnitAssetValidationError(
+    `${label} ${motion} clip(s) [${clipNames.join(", ")}] produce no visible deformation. `
+    + "Check the skeleton/bone names and export a genuinely rigged animation.",
+  );
 }
 
 async function loadSingleAsset(
@@ -509,30 +999,81 @@ async function loadSingleAsset(
   const frames = new Map<UnitMotion, readonly BakedUnitFrame[]>();
   let materials: THREE.Material[] | null = null;
   try {
+    const sourceStats = assertSourceBudget(
+      `${archetype} GLB`,
+      [gltf.scene],
+      MAX_SINGLE_SOURCE_TRIANGLES,
+    );
     const supplemental = await loadAnimationClips(entry, manifestUrl, loadGltf);
     const selected = selectedClips(entry, gltf.animations, supplemental);
+    if (selected.rawClips.length === 0) {
+      throw new UnitAssetValidationError(
+        `${archetype} GLB contains no animation clips. Keep the procedural fallback until the model is genuinely rigged.`,
+      );
+    }
+    if (selected.rawClips.length > 0 && selected.clips.size === 0) {
+      throw new UnitAssetValidationError(
+        `${archetype} GLB contains animations, but none match the supported motions: ${UNIT_MOTIONS.join(", ")}.`,
+      );
+    }
+    for (const [motion, clip] of selected.clips) {
+      assertClipTargetsScene(gltf.scene, clip, `${archetype} ${motion}`);
+    }
+    assertBakedBudget(
+      `${archetype} GLB`,
+      sourceStats.renderedTriangles,
+      predictedFrameCount(entry, selected.clips),
+    );
+
     const targetHeight = UNIT_METRICS[archetype].height;
+    const cache = new Map<THREE.AnimationClip, Map<number, readonly BakedUnitFrame[]>>();
     for (const motion of UNIT_MOTIONS) {
-      const clip = selected.clips.get(motion) ?? null;
-      const times = sampleTimes(clip, frameCount(entry, motion, clip !== null));
-      const rig = cloneSkeleton(gltf.scene) as THREE.Group;
-      const mixer = new THREE.AnimationMixer(rig);
-      playClip(mixer, clip);
-      const sampled: BakedUnitFrame[] = [];
-      for (let index = 0; index < times.length; index += 1) {
-        mixer.setTime(times[index]!);
-        rig.updateMatrixWorld(true);
-        const baked = bakeScene(rig);
-        normalizeGeometry(baked.geometry, targetHeight, entry.forwardAxis ?? "+z");
-        materials ??= materialList(baked.materials);
-        sampled.push({
-          phase: times.length <= 1 ? 0 : index / (times.length - 1),
-          geometry: baked.geometry,
-        });
+      const clip = selected.clips.get(motion);
+      if (!clip) continue;
+      const count = frameCount(entry, motion, true);
+      const looping = LOOPING_MOTIONS.has(motion);
+      const cacheKey = looping ? count : -count;
+      const byCount = cache.get(clip) ?? new Map<number, readonly BakedUnitFrame[]>();
+      let sampled = byCount.get(cacheKey);
+      if (!sampled) {
+        const phases = samplePhases(count, looping);
+        const times = sampleTimes(clip, count, looping);
+        const rig = cloneSkeleton(gltf.scene) as THREE.Group;
+        const mixer = new THREE.AnimationMixer(rig);
+        playClip(mixer, clip);
+        const bakedFrames: BakedUnitFrame[] = [];
+        for (let index = 0; index < times.length; index += 1) {
+          mixer.setTime(times[index]!);
+          rig.updateMatrixWorld(true);
+          const baked = bakeScene(rig);
+          normalizeGeometry(baked.geometry, targetHeight, entry.forwardAxis ?? "+z");
+          materials ??= materialList(baked.materials);
+          bakedFrames.push({
+            phase: phases[index] ?? 0,
+            geometry: baked.geometry,
+          });
+        }
+        mixer.stopAllAction();
+        mixer.uncacheRoot(rig);
+        assertFramesDeform(`${archetype} GLB`, motion, [clip.name], bakedFrames);
+        sampled = bakedFrames;
+        byCount.set(cacheKey, sampled);
+        cache.set(clip, byCount);
       }
-      mixer.stopAllAction();
-      mixer.uncacheRoot(rig);
       frames.set(motion, sampled);
+    }
+
+    let fallback = frames.get("idle");
+    if (!fallback) {
+      const rig = cloneSkeleton(gltf.scene) as THREE.Group;
+      rig.updateMatrixWorld(true);
+      const baked = bakeScene(rig);
+      normalizeGeometry(baked.geometry, targetHeight, entry.forwardAxis ?? "+z");
+      materials ??= materialList(baked.materials);
+      fallback = [{ phase: 0, geometry: baked.geometry }];
+    }
+    for (const motion of UNIT_MOTIONS) {
+      if (!frames.has(motion)) frames.set(motion, fallback);
     }
 
     if (!materials) throw new Error("No renderable material was found in " + sourceUrl + ".");
@@ -570,21 +1111,57 @@ async function loadMountedAsset(
   try {
     horseGltf = await loadGltf(horseUrl);
     riderGltf = await loadGltf(riderUrl);
+    const sourceStats = assertSourceBudget(
+      "mounted knight GLBs",
+      [horseGltf.scene, riderGltf.scene],
+      MAX_MOUNTED_SOURCE_TRIANGLES,
+    );
     const horseSupplemental = await loadAnimationClips(entry.horse, manifestUrl, loadGltf);
     const riderSupplemental = await loadAnimationClips(entry.rider, manifestUrl, loadGltf);
     const horseSelected = selectedClips(entry.horse, horseGltf.animations, horseSupplemental);
     const riderSelected = selectedClips(entry.rider, riderGltf.animations, riderSupplemental);
-    const representative = new Map<UnitMotion, THREE.AnimationClip>();
-    for (const motion of UNIT_MOTIONS) {
-      const clip = riderSelected.clips.get(motion) ?? horseSelected.clips.get(motion);
-      if (clip) representative.set(motion, clip);
+    if (horseSelected.rawClips.length === 0 || riderSelected.rawClips.length === 0) {
+      const missing = horseSelected.rawClips.length === 0 ? "horse" : "rider";
+      throw new UnitAssetValidationError(
+        `Mounted knight ${missing} GLB contains no animation clips; both components must be independently rigged.`,
+      );
     }
+    if (horseSelected.rawClips.length > 0 && horseSelected.clips.size === 0) {
+      throw new UnitAssetValidationError("Horse GLB has animations, but none match a supported motion.");
+    }
+    if (riderSelected.rawClips.length > 0 && riderSelected.clips.size === 0) {
+      throw new UnitAssetValidationError("Rider GLB has animations, but none match a supported motion.");
+    }
+    for (const [motion, clip] of horseSelected.clips) {
+      assertClipTargetsScene(horseGltf.scene, clip, `horse ${motion}`);
+    }
+    for (const [motion, clip] of riderSelected.clips) {
+      assertClipTargetsScene(riderGltf.scene, clip, `rider ${motion}`);
+    }
+
+    const representative = new Map<UnitMotion, THREE.AnimationClip>();
+    let predictedFrames = 0;
+    let missingMotion = false;
+    for (const motion of UNIT_MOTIONS) {
+      const horseClip = horseSelected.clips.get(motion);
+      const riderClip = riderSelected.clips.get(motion);
+      const clip = riderClip ?? horseClip;
+      if (clip) {
+        representative.set(motion, clip);
+        predictedFrames += frameCount(entry, motion, true);
+      } else {
+        missingMotion = true;
+      }
+    }
+    if (missingMotion && !representative.has("idle")) predictedFrames += 1;
+    assertBakedBudget("mounted knight GLBs", sourceStats.renderedTriangles, Math.max(1, predictedFrames));
 
     const targetHeight = UNIT_METRICS[archetype].height;
     for (const motion of UNIT_MOTIONS) {
       const horseClip = horseSelected.clips.get(motion) ?? null;
       const riderClip = riderSelected.clips.get(motion) ?? null;
-      const phases = samplePhases(frameCount(entry, motion, horseClip !== null || riderClip !== null));
+      if (!horseClip && !riderClip) continue;
+      const phases = samplePhases(frameCount(entry, motion, true), LOOPING_MOTIONS.has(motion));
       const horseRig = cloneSkeleton(horseGltf.scene) as THREE.Group;
       const riderRig = cloneSkeleton(riderGltf.scene) as THREE.Group;
       const mounted = assembleMountedRig(horseRig, riderRig, entry);
@@ -606,7 +1183,28 @@ async function loadMountedAsset(
       riderMixer.stopAllAction();
       horseMixer.uncacheRoot(mounted.horse);
       riderMixer.uncacheRoot(mounted.rider);
+      assertFramesDeform(
+        "mounted knight GLBs",
+        motion,
+        [horseClip?.name, riderClip?.name].filter((name): name is string => Boolean(name)),
+        sampled,
+      );
       frames.set(motion, sampled);
+    }
+
+    let fallback = frames.get("idle");
+    if (!fallback) {
+      const horseRig = cloneSkeleton(horseGltf.scene) as THREE.Group;
+      const riderRig = cloneSkeleton(riderGltf.scene) as THREE.Group;
+      const mounted = assembleMountedRig(horseRig, riderRig, entry);
+      mounted.root.updateMatrixWorld(true);
+      const baked = bakeScene(mounted.root);
+      normalizeGeometry(baked.geometry, targetHeight, "+z");
+      materials ??= materialList(baked.materials);
+      fallback = [{ phase: 0, geometry: baked.geometry }];
+    }
+    for (const motion of UNIT_MOTIONS) {
+      if (!frames.has(motion)) frames.set(motion, fallback);
     }
 
     if (!materials) throw new Error("No renderable material was found in the mounted knight.");
@@ -615,7 +1213,7 @@ async function loadMountedAsset(
       archetype,
       sourceUrl: horseUrl + "#" + riderUrl,
       sourceScene: source,
-      rawClips: [...horseSelected.rawClips, ...riderSelected.rawClips],
+      rawClips: [...new Set([...horseSelected.rawClips, ...riderSelected.rawClips])],
       clips: representative,
       componentClips: new Map([
         ["horse", horseSelected.clips],
@@ -680,27 +1278,81 @@ export function cloneFactionMaterials(asset: ExternalUnitAsset, owner: number): 
   });
 }
 
+/**
+ * Give the renderer an independently owned material while retaining the GLB's
+ * compatible texture channels. MeshStandard/Physical inputs are converted to
+ * the shared banded toon material; unsupported material families are cloned.
+ * Textures intentionally remain shared because disposing a material does not
+ * dispose its textures.
+ */
+export function createExternalToonMaterial(source: THREE.Material): THREE.Material {
+  if (source instanceof THREE.MeshToonMaterial) return source.clone();
+  if (!(source instanceof THREE.MeshStandardMaterial)) return source.clone();
+
+  const material = createToonMaterial({
+    color: source.color,
+    map: source.map,
+    lightMap: source.lightMap,
+    lightMapIntensity: source.lightMapIntensity,
+    aoMap: source.aoMap,
+    aoMapIntensity: source.aoMapIntensity,
+    emissive: source.emissive,
+    emissiveIntensity: source.emissiveIntensity,
+    emissiveMap: source.emissiveMap,
+    bumpMap: source.bumpMap,
+    bumpScale: source.bumpScale,
+    normalMap: source.normalMap,
+    normalMapType: source.normalMapType,
+    normalScale: source.normalScale.clone(),
+    displacementMap: source.displacementMap,
+    displacementScale: source.displacementScale,
+    displacementBias: source.displacementBias,
+    alphaMap: source.alphaMap,
+    wireframe: source.wireframe,
+    wireframeLinewidth: source.wireframeLinewidth,
+    wireframeLinecap: source.wireframeLinecap,
+    wireframeLinejoin: source.wireframeLinejoin,
+    fog: source.fog,
+  });
+  const copyBase = THREE.Material.prototype.copy as (
+    this: THREE.Material,
+    input: THREE.Material,
+  ) => THREE.Material;
+  copyBase.call(material, source);
+  material.needsUpdate = true;
+  return material;
+}
+
 export function unitMotion(state: string): UnitMotion {
+  if (state === "dead") return "death";
   return UNIT_MOTIONS.includes(state as UnitMotion) ? state as UnitMotion : "idle";
 }
 
-export function frameIndexForPhase(frameTotal: number, phaseQ: number): number {
+export function frameIndexForPhase(frameTotal: number, phaseQ: number, looping = true): number {
   if (frameTotal <= 1) return 0;
-  const phase = THREE.MathUtils.clamp(phaseQ / 65_535, 0, 1);
-  return Math.min(frameTotal - 1, Math.floor(phase * frameTotal));
+  const quantized = THREE.MathUtils.clamp(Math.trunc(phaseQ), 0, 65_535);
+  if (looping) {
+    // 65,536 is the phase ring size; the maximum quantized value therefore
+    // stays in the final sample instead of wrapping one tick early.
+    return Math.min(frameTotal - 1, Math.floor(quantized / 65_536 * frameTotal));
+  }
+  return Math.min(frameTotal - 1, Math.round(quantized / 65_535 * (frameTotal - 1)));
 }
 
 export async function loadExternalUnitLibrary(
   options: LoadExternalUnitLibraryOptions = {},
 ): Promise<ExternalUnitLibrary> {
   const manifestUrl = options.manifestUrl ?? `${import.meta.env.BASE_URL}models/units/manifest.json`;
-  const manifest = await fetchManifest(manifestUrl);
   const assets = new Map<UnitArchetype, ExternalUnitAsset>();
   const errors = new Map<UnitArchetype, Error>();
+  const manifestResult = await fetchManifest(manifestUrl);
+  if (manifestResult.error) {
+    for (const archetype of UNIT_ARCHETYPES) errors.set(archetype, manifestResult.error);
+  }
   const loader = new GLTFLoader();
   const loadGltf = options.loadGltf ?? ((url: string) => loader.loadAsync(url));
   const entries = UNIT_ARCHETYPES.flatMap((archetype) => {
-    const entry = manifest?.units[archetype];
+    const entry = manifestResult.manifest?.units[archetype];
     return entry ? [[archetype, entry] as const] : [];
   });
   if (entries.length === 0) {
@@ -723,8 +1375,8 @@ export async function loadExternalUnitLibrary(
     errors,
     dispose() {
       for (const asset of assets.values()) {
-        for (const frames of asset.frames.values()) for (const frame of frames) frame.geometry.dispose();
-        for (const material of asset.materials) material.dispose();
+        disposeBakedFrames(asset.frames);
+        for (const material of new Set(asset.materials)) material.dispose();
         disposeObject(asset.sourceScene);
       }
       assets.clear();

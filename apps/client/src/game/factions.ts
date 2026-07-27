@@ -3,10 +3,10 @@
  * The numeric and CSS forms intentionally live together so they cannot drift.
  */
 export const FACTION_STYLES = [
-  { owner: 0, id: "north", name: "REINO AZUL", color: 0x3488c9, cssColor: "#3488c9", dark: 0x153c63, accent: 0x9adfff, x: 0, z: -60 },
-  { owner: 1, id: "east", name: "DOMINIO CARMESÍ", color: 0xd94e41, cssColor: "#d94e41", dark: 0x67241f, accent: 0xffaaa1, x: 60, z: 0 },
-  { owner: 2, id: "south", name: "PACTO ESMERALDA", color: 0x43a962, cssColor: "#43a962", dark: 0x214d2e, accent: 0xa7f2b5, x: 0, z: 60 },
-  { owner: 3, id: "west", name: "CORTE VIOLETA", color: 0xa146c3, cssColor: "#a146c3", dark: 0x4d245e, accent: 0xe2a9f5, x: -60, z: 0 },
+  { owner: 0, id: "north", name: "COLONIA ZAFIRO", color: 0x2d8fd5, cssColor: "#2d8fd5", dark: 0x123d64, accent: 0x8fe9ff, x: 0, z: -60 },
+  { owner: 1, id: "east", name: "ENJAMBRE RUBÍ", color: 0xd94a3f, cssColor: "#d94a3f", dark: 0x681d1b, accent: 0xffaa86, x: 60, z: 0 },
+  { owner: 2, id: "south", name: "NIDO ESMERALDA", color: 0x38a95b, cssColor: "#38a95b", dark: 0x174b2a, accent: 0x9af0a7, x: 0, z: 60 },
+  { owner: 3, id: "west", name: "COLMENA AMATISTA", color: 0x9d4bc5, cssColor: "#9d4bc5", dark: 0x47235c, accent: 0xe7adff, x: -60, z: 0 },
 ] as const;
 
 export const FACTION_COLORS = [

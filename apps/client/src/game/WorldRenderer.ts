@@ -11,16 +11,13 @@ import {
   MAP_HALF_SIZE,
   MAX_RENDERED_UNITS,
   UNIT_ARCHETYPES,
+  UNIT_METRICS,
   UNIT_POSES,
   buildLanes,
-  createCannonTowerGeometry,
-  createCastle,
-  createCenterObjective,
-  createGroundDetails,
+  createRoads,
   createTerrain,
   createToonMaterial,
   createUnitGeometry,
-  createVegetation,
   unitArchetype,
   type CastleVisual,
   type CenterVisual,
@@ -30,13 +27,27 @@ import {
   type VegetationBatch,
 } from "./procedural";
 import {
+  createAnthill,
+  createForestFloorDetails,
+  createMacroVegetation,
+  createNectarHeart,
+  createTermiteTowerGeometry,
+} from "./environment/insectEnvironment";
+import {
   cloneFactionMaterials,
+  createExternalToonMaterial,
   frameIndexForPhase,
   loadExternalUnitLibrary,
   unitMotion,
   type ExternalUnitAsset,
   type ExternalUnitLibrary,
 } from "./units/gltfUnitAssets";
+import {
+  healthBarColor,
+  healthRatio,
+  remapMotionPhaseAtContact,
+  shouldShowHealthBar,
+} from "./units/combatPresentation";
 import { visualUnitPose } from "./units/visualUnitPose";
 import type { CameraPose, NormalizedSnapshot, NormalizedUnit, QualityPreset } from "./types";
 
@@ -160,6 +171,22 @@ function externalUnitVisualKey(archetype: UnitArchetype, motion: string, frame: 
   return `${archetype}:${motion}:${frame}`;
 }
 
+const MOTION_PHASE_RANGE = 65_536;
+const CYCLIC_UNIT_STATES = new Set(["idle", "walk", "attack"]);
+const SHADOW_NEUTRAL = new THREE.Color(0x11140f);
+
+function interpolatedMotionPhase(
+  previous: NormalizedUnit | undefined,
+  current: NormalizedUnit,
+  alpha: number,
+): number {
+  if (!previous || previous.state !== current.state) return current.motionPhase;
+  const from = THREE.MathUtils.clamp(Math.trunc(previous.motionPhase), 0, MOTION_PHASE_RANGE - 1);
+  const to = THREE.MathUtils.clamp(Math.trunc(current.motionPhase), 0, MOTION_PHASE_RANGE - 1);
+  if (!CYCLIC_UNIT_STATES.has(current.state)) return Math.round(THREE.MathUtils.lerp(from, to, alpha));
+  const forwardDelta = THREE.MathUtils.euclideanModulo(to - from, MOTION_PHASE_RANGE);
+  return Math.round(THREE.MathUtils.euclideanModulo(from + forwardDelta * alpha, MOTION_PHASE_RANGE));
+}
 
 function isTextInput(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -246,6 +273,8 @@ export class WorldRenderer {
   private readonly scale = new THREE.Vector3();
   private readonly quaternion = new THREE.Quaternion();
   private readonly shadowQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI * 0.5, 0, 0));
+  private readonly shadowColor = new THREE.Color();
+  private readonly healthColor = new THREE.Color();
   private readonly cameraRight = new THREE.Vector3();
   private readonly cameraForward = new THREE.Vector3();
   private readonly zoomAnchor = new THREE.Vector3();
@@ -275,10 +304,11 @@ export class WorldRenderer {
     this.callbacks.onResourceProgress?.({ progress: 0.28, label: "Terreno ilustrado listo" });
     await this.loadRiggedUnitAssets();
     if (this.disposed) throw new Error("WorldRenderer was disposed while loading unit resources.");
-    this.callbacks.onResourceProgress?.({ progress: 0.55, label: "Construyendo los reinos" });
+    this.callbacks.onResourceProgress?.({ progress: 0.55, label: "Dando vida a las colonias" });
 
-    const requestWebGPU = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("webgpu");
-    const hasWebGPU = typeof navigator !== "undefined" && "gpu" in navigator && requestWebGPU;
+    const forceWebGL = typeof window !== "undefined"
+      && new URLSearchParams(window.location.search).has("forceWebGL");
+    const hasWebGPU = typeof navigator !== "undefined" && "gpu" in navigator && !forceWebGL;
     try {
       this.renderer = await this.createRenderer(!hasWebGPU);
       this.backend = hasWebGPU ? "webgpu" : "webgl2";
@@ -289,12 +319,10 @@ export class WorldRenderer {
       this.backend = "webgl2";
     }
     if (!this.renderer) throw new Error("Renderer initialization did not complete.");
-    this.callbacks.onResourceProgress?.({ progress: 0.82, label: "Preparando iluminaci?n" });
+    this.callbacks.onResourceProgress?.({ progress: 0.82, label: "Preparando iluminacion" });
     this.renderPipeline = new RenderPipeline(this.renderer);
     this.renderPipeline.outputNode = toonOutlinePass(this.scene, this.camera, new THREE.Color(0x172019), 0.0018, 0.82);
     this.renderPipeline.needsUpdate = true;
-
-
     this.applyQuality();
     this.bindEvents();
     this.resize();
@@ -341,8 +369,13 @@ export class WorldRenderer {
     if (this.ghost && card && this.selectedKind === "unit") {
       const definition = CONTENT.cards.find((candidate) => candidate.id === card);
       const visualKind = definition && "archetypeId" in definition ? definition.archetypeId : card;
+      const archetype = unitArchetype(visualKind);
+      const externalAsset = this.externalUnitLibrary?.assets.get(archetype);
+      const externalIdle = externalAsset?.frames.get("idle")?.[0]?.geometry;
       const previousGeometry = this.ghost.unit.geometry;
-      this.ghost.unit.geometry = createUnitGeometry(visualKind, FACTIONS[0].color);
+      // The preview owns a clone; it must never dispose a baked geometry shared by live instances.
+      this.ghost.unit.geometry = externalIdle?.clone()
+        ?? createUnitGeometry(visualKind, FACTIONS[0].color);
       previousGeometry.dispose();
     }
 
@@ -430,8 +463,9 @@ export class WorldRenderer {
     if (this.worldBuilt) return;
     const terrain = await createTerrain();
     this.scene.add(terrain);
+    this.scene.add(createRoads(this.lanes));
     this.worldBuilt = true;
-    this.scene.add(createGroundDetails(this.lanes));
+    this.scene.add(createForestFloorDetails(this.lanes));
 
     const hemisphere = new THREE.HemisphereLight(0xd9e4c9, 0x263323, 1.25);
     this.scene.add(hemisphere);
@@ -448,11 +482,11 @@ export class WorldRenderer {
     this.sun.shadow.normalBias = 0.045;
     this.scene.add(this.sun, this.sun.target);
 
-    this.vegetation = createVegetation(this.lanes);
+    this.vegetation = createMacroVegetation(this.lanes);
     for (const batch of this.vegetation) this.scene.add(batch.group);
 
     for (let owner = 0; owner < 4; owner += 1) {
-      const castle = createCastle(owner);
+      const castle = createAnthill(owner);
       const node = MAP_GRAPH.nodes.find((candidate) => candidate.playerId === owner);
       if (node) castle.group.position.set(node.position.x, 0, node.position.z);
       castle.group.rotation.y = Math.atan2(-castle.group.position.x, -castle.group.position.z);
@@ -460,7 +494,7 @@ export class WorldRenderer {
       this.scene.add(castle.group);
     }
 
-    this.center = createCenterObjective();
+    this.center = createNectarHeart();
     this.scene.add(this.center.group);
     this.createTowerPadMarkers();
     this.createUnitInstances();
@@ -471,6 +505,7 @@ export class WorldRenderer {
   }
   private async loadRiggedUnitAssets(): Promise<void> {
     const library = await loadExternalUnitLibrary({
+      manifestUrl: `${import.meta.env.BASE_URL}models/insects/manifest.json`,
       onProgress: (progress, label) => {
         this.callbacks.onResourceProgress?.({ progress: 0.1 + progress * 0.3, label });
       },
@@ -490,33 +525,29 @@ export class WorldRenderer {
     for (let owner = 0; owner < this.unitBatches.length; owner += 1) {
       const batch = this.unitBatches[owner];
       if (!batch) continue;
-      const materials = cloneFactionMaterials(asset, owner);
+      const factionMaterials = cloneFactionMaterials(asset, owner);
+      const materials = factionMaterials.map(createExternalToonMaterial);
+      for (const material of factionMaterials) material.dispose();
       for (const [motion, frames] of asset.frames) {
         frames.forEach((frame, frameIndex) => {
           const key = externalUnitVisualKey(asset.archetype, motion, frameIndex);
           if (batch.units.has(key)) return;
-          const mesh = new THREE.InstancedMesh(frame.geometry, materials, MAX_RENDERED_UNITS);
+          const mesh = new THREE.InstancedMesh(
+            frame.geometry,
+            materials.length === 1 ? materials[0]! : materials,
+            MAX_RENDERED_UNITS,
+          );
           mesh.name = `rigged-${owner}-${key}`;
           mesh.count = 0;
+          mesh.visible = false;
           mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
           mesh.castShadow = false;
           mesh.receiveShadow = true;
           mesh.frustumCulled = false;
-          const outline = new THREE.InstancedMesh(
-            frame.geometry,
-            new THREE.MeshBasicMaterial({ color: 0x171d18, side: THREE.BackSide }),
-            MAX_RENDERED_UNITS,
-          );
-          outline.name = `rigged-outline-${owner}-${key}`;
-          outline.count = 0;
-          outline.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-          outline.castShadow = false;
-          outline.receiveShadow = false;
-          outline.frustumCulled = false;
-          outline.renderOrder = -1;
           batch.units.set(key, mesh);
-          batch.outlines.set(key, outline);
-          this.scene.add(outline, mesh);
+          // toonOutlinePass provides the silhouette. A second expanded shell doubles
+          // the already baked GLB geometry and creates visibly thick outlines.
+          this.scene.add(mesh);
         });
       }
     }
@@ -526,15 +557,29 @@ export class WorldRenderer {
     asset: ExternalUnitAsset,
     unit: NormalizedUnit,
     timeSeconds: number,
+    interpolatedPhase: number,
   ): UnitVisualKey {
     const motion = unitMotion(unit.state);
     const frames = asset.frames.get(motion) ?? asset.frames.get("idle") ?? [];
-    let phase = unit.motionPhase;
+    let phase = interpolatedPhase;
+    if (motion === "attack") {
+      const definition = CONTENT.units.find((candidate) => candidate.id === asset.archetype);
+      if (definition && definition.attackCooldownTicks > 0) {
+        phase = remapMotionPhaseAtContact(
+          phase,
+          definition.attackAnticipationTicks / definition.attackCooldownTicks,
+        );
+      }
+    }
     if (phase === 0 && unit.stateTick === 0 && (motion === "walk" || motion === "idle")) {
       const cyclesPerSecond = motion === "walk" ? 1.45 : 0.42;
       phase = Math.floor((timeSeconds * cyclesPerSecond + unit.id * 0.173) % 1 * 65_535);
     }
-    return externalUnitVisualKey(asset.archetype, motion, frameIndexForPhase(frames.length, phase));
+    return externalUnitVisualKey(
+      asset.archetype,
+      motion,
+      frameIndexForPhase(frames.length, phase, CYCLIC_UNIT_STATES.has(motion)),
+    );
   }
   private createTowerPadMarkers(): void {
     const geometry = new THREE.CylinderGeometry(1.45, 1.65, 0.18, 12);
@@ -573,12 +618,14 @@ export class WorldRenderer {
             MAX_RENDERED_UNITS,
           );
           mesh.count = 0;
+          mesh.visible = false;
           mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
           mesh.castShadow = false;
           mesh.receiveShadow = true;
           mesh.frustumCulled = false;
           const outline = new THREE.InstancedMesh(geometry, outlineMaterial, MAX_RENDERED_UNITS);
           outline.count = 0;
+          outline.visible = false;
           outline.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
           outline.castShadow = false;
           outline.receiveShadow = false;
@@ -591,11 +638,12 @@ export class WorldRenderer {
       }
 
       const buildings = new THREE.InstancedMesh(
-        createCannonTowerGeometry(faction.color),
+        createTermiteTowerGeometry(faction.color),
         createToonMaterial({ color: 0xffffff, vertexColors: true }),
         256,
       );
       buildings.count = 0;
+      buildings.visible = false;
       buildings.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       buildings.castShadow = true;
       buildings.receiveShadow = true;
@@ -605,25 +653,49 @@ export class WorldRenderer {
     }
 
     const shadowGeometry = new THREE.CircleGeometry(0.48, 12);
-    const shadowMaterial = new THREE.MeshBasicMaterial({ color: 0x11140f, transparent: true, opacity: 0.32, depthWrite: false });
+    const shadowMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.3,
+      depthWrite: false,
+    });
     this.shadowInstances = new THREE.InstancedMesh(shadowGeometry, shadowMaterial, MAX_RENDERED_UNITS);
     this.shadowInstances.count = 0;
+    this.shadowInstances.visible = false;
     this.shadowInstances.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.shadowInstances.frustumCulled = false;
 
     const barGeometry = new THREE.PlaneGeometry(1, 0.12);
     this.healthBackInstances = new THREE.InstancedMesh(
       barGeometry,
-      new THREE.MeshBasicMaterial({ color: 0x171b16, depthWrite: false, transparent: true, opacity: 0.9 }),
+      new THREE.MeshBasicMaterial({
+        color: 0x11140f,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        opacity: 0.92,
+        toneMapped: false,
+      }),
       MAX_RENDERED_UNITS,
     );
     this.healthFillInstances = new THREE.InstancedMesh(
       barGeometry,
-      new THREE.MeshBasicMaterial({ color: 0x86e16f, depthWrite: false }),
+      new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        opacity: 1,
+        toneMapped: false,
+        vertexColors: true,
+      }),
       MAX_RENDERED_UNITS,
     );
     this.healthBackInstances.count = 0;
     this.healthFillInstances.count = 0;
+    this.healthBackInstances.visible = false;
+    this.healthFillInstances.visible = false;
     this.healthBackInstances.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.healthFillInstances.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.healthBackInstances.frustumCulled = false;
@@ -641,7 +713,7 @@ export class WorldRenderer {
     const buildingMaterial = unitMaterial.clone();
     const spellMaterial = new THREE.MeshBasicMaterial({ color: 0x75ef9d, transparent: true, opacity: 0.72, side: THREE.DoubleSide, depthWrite: false });
     const unit = new THREE.Mesh(createUnitGeometry("guard", FACTIONS[0].color), unitMaterial);
-    const building = new THREE.Mesh(createCannonTowerGeometry(FACTIONS[0].color), buildingMaterial);
+    const building = new THREE.Mesh(createTermiteTowerGeometry(FACTIONS[0].color), buildingMaterial);
     const spell = new THREE.Mesh(new THREE.RingGeometry(0.82, 1, 48), spellMaterial);
     spell.rotation.x = -Math.PI * 0.5;
     spell.position.y = 0.18;
@@ -739,17 +811,19 @@ export class WorldRenderer {
       const x = previous ? THREE.MathUtils.lerp(previous.x, current.x, alpha) : current.x;
       const z = previous ? THREE.MathUtils.lerp(previous.z, current.z, alpha) : current.z;
       const rotation = previous ? lerpAngle(previous.rotation, current.rotation, alpha) : current.rotation;
+      const phase = interpolatedMotionPhase(previous, current, alpha);
       const owner = THREE.MathUtils.clamp(Math.trunc(current.owner), 0, 3);
       const batch = this.unitBatches[owner];
       const counts = ownerUnitCounts[owner];
       if (!batch || !counts) continue;
       const isBuilding = current.kind.includes("cannon") || current.kind.includes("tower");
       const size = isBuilding ? 1.3 : 1;
-      const walkCycle = current.motionPhase / 65_535 * Math.PI * 2;
+      const walkCycle = phase / 65_535 * Math.PI * 2;
       const bob = current.state === "walk" ? Math.abs(Math.sin(walkCycle)) * 0.045 : 0;
       const hitShake = current.state === "hit" ? Math.sin(timeSeconds * 42 + current.id) * 0.11 : 0;
       const buildingPulse = current.state === "attack" ? 1 + Math.max(0, Math.sin(timeSeconds * 11 + current.id)) * 0.1 : 1;
       this.quaternion.setFromEuler(new THREE.Euler(0, rotation, 0));
+      let externalAsset: ExternalUnitAsset | undefined;
 
       if (isBuilding) {
         const index = ownerBuildingCounts[owner] ?? 0;
@@ -761,20 +835,22 @@ export class WorldRenderer {
         ownerBuildingCounts[owner] = index + 1;
       } else {
         const archetype = unitArchetype(current.kind);
-        const asset = this.externalUnitLibrary?.assets.get(archetype);
-        const key = asset ? this.riggedUnitVisualKey(asset, current, timeSeconds)
-          : unitVisualKey(archetype, visualUnitPose(current.state, current.stateTick, current.motionPhase));
+        externalAsset = this.externalUnitLibrary?.assets.get(archetype);
+        const key = externalAsset ? this.riggedUnitVisualKey(externalAsset, current, timeSeconds, phase)
+          : unitVisualKey(archetype, visualUnitPose(current.state, current.stateTick, phase));
         const mesh = batch.units.get(key);
         const outline = batch.outlines.get(key);
         const index = counts.get(key) ?? 0;
-        if (!mesh || !outline || index >= MAX_RENDERED_UNITS) continue;
+        if (!mesh || index >= MAX_RENDERED_UNITS) continue;
         this.position.set(x + hitShake, 0.08 + bob, z);
         this.scale.set(size, size, size);
         this.matrix.compose(this.position, this.quaternion, this.scale);
         mesh.setMatrixAt(index, this.matrix);
-        this.scale.multiplyScalar(1.075);
-        this.matrix.compose(this.position, this.quaternion, this.scale);
-        outline.setMatrixAt(index, this.matrix);
+        if (outline) {
+          this.scale.multiplyScalar(1.075);
+          this.matrix.compose(this.position, this.quaternion, this.scale);
+          outline.setMatrixAt(index, this.matrix);
+        }
         counts.set(key, index + 1);
       }
 
@@ -783,20 +859,29 @@ export class WorldRenderer {
       this.scale.set(shadowScale, shadowScale * 0.72, shadowScale);
       this.matrix.compose(this.position, this.shadowQuaternion, this.scale);
       this.shadowInstances.setMatrixAt(renderedCount, this.matrix);
+      const faction = FACTIONS[owner] ?? FACTIONS[0];
+      this.shadowColor.setHex(faction.dark).lerp(SHADOW_NEUTRAL, 0.55);
+      this.shadowInstances.setColorAt(renderedCount, this.shadowColor);
 
-      const healthRatio = THREE.MathUtils.clamp(current.health / Math.max(1, current.maxHealth), 0.015, 1);
-      if (healthRatio < 0.995 || current.state === "hit") {
-        const barWidth = isBuilding ? 1.8 : 1.1 * size;
-        const barY = isBuilding ? 2.65 : current.kind.includes("giant") ? 2.65 : 2.1 * size;
+      const visibleHealthRatio = healthRatio(current);
+      if (shouldShowHealthBar(current)) {
+        const renderedUnitHeight = isBuilding
+          ? 2.37
+          : externalAsset?.targetHeight ?? UNIT_METRICS[unitArchetype(current.kind)].height;
+        const barWidth = isBuilding
+          ? 1.8
+          : 1.1 * THREE.MathUtils.clamp(renderedUnitHeight / 1.7, 1, 1.55);
+        const barY = isBuilding ? 2.65 : renderedUnitHeight + 0.28;
         this.position.set(x, barY, z);
         this.scale.set(barWidth, 1, 1);
         this.matrix.compose(this.position, this.camera.quaternion, this.scale);
         this.healthBackInstances.setMatrixAt(healthCount, this.matrix);
         this.cameraRight.set(1, 0, 0).applyQuaternion(this.camera.quaternion);
-        this.position.addScaledVector(this.cameraRight, -barWidth * (1 - healthRatio) * 0.5);
-        this.scale.set(barWidth * healthRatio, 0.62, 1);
+        this.position.addScaledVector(this.cameraRight, -barWidth * (1 - visibleHealthRatio) * 0.5);
+        this.scale.set(barWidth * visibleHealthRatio, 0.62, 1);
         this.matrix.compose(this.position, this.camera.quaternion, this.scale);
         this.healthFillInstances.setMatrixAt(healthCount, this.matrix);
+        this.healthFillInstances.setColorAt(healthCount, this.healthColor.setHex(healthBarColor(visibleHealthRatio)));
         healthCount += 1;
       }
       renderedCount += 1;
@@ -807,22 +892,45 @@ export class WorldRenderer {
       const counts = ownerUnitCounts[owner];
       if (!batch || !counts) continue;
       for (const [key, mesh] of batch.units) {
+        const count = counts.get(key) ?? 0;
+        mesh.count = count;
+        mesh.visible = count > 0;
+        if (count > 0) {
+          mesh.instanceMatrix.needsUpdate = true;
+        }
         const outline = batch.outlines.get(key);
-        if (!outline) continue;
-        mesh.count = counts.get(key) ?? 0;
-        outline.count = mesh.count;
-        mesh.instanceMatrix.needsUpdate = true;
-        outline.instanceMatrix.needsUpdate = true;
+        if (outline) {
+          outline.count = count;
+          outline.visible = count > 0;
+          if (count > 0) {
+            outline.instanceMatrix.needsUpdate = true;
+          }
+        }
       }
-      batch.buildings.count = ownerBuildingCounts[owner] ?? 0;
-      batch.buildings.instanceMatrix.needsUpdate = true;
+      const buildingCount = ownerBuildingCounts[owner] ?? 0;
+      batch.buildings.count = buildingCount;
+      batch.buildings.visible = buildingCount > 0;
+      if (buildingCount > 0) {
+        batch.buildings.instanceMatrix.needsUpdate = true;
+      }
     }
     this.shadowInstances.count = renderedCount;
+    this.shadowInstances.visible = renderedCount > 0;
+    if (renderedCount > 0) {
+      this.shadowInstances.instanceMatrix.needsUpdate = true;
+      if (this.shadowInstances.instanceColor) this.shadowInstances.instanceColor.needsUpdate = true;
+    }
     this.healthBackInstances.count = healthCount;
+    this.healthBackInstances.visible = healthCount > 0;
+    if (healthCount > 0) {
+      this.healthBackInstances.instanceMatrix.needsUpdate = true;
+    }
     this.healthFillInstances.count = healthCount;
-    this.shadowInstances.instanceMatrix.needsUpdate = true;
-    this.healthBackInstances.instanceMatrix.needsUpdate = true;
-    this.healthFillInstances.instanceMatrix.needsUpdate = true;
+    this.healthFillInstances.visible = healthCount > 0;
+    if (healthCount > 0) {
+      this.healthFillInstances.instanceMatrix.needsUpdate = true;
+      if (this.healthFillInstances.instanceColor) this.healthFillInstances.instanceColor.needsUpdate = true;
+    }
   }
   private updateGhost(now: number): void {
     if (!this.ghost || !this.selectedCard) return;
@@ -1239,5 +1347,25 @@ export class WorldRenderer {
     window.removeEventListener("keyup", this.onKeyUp);
     this.pressedKeys.clear();
   }
-}
 
+  getPlayerCoordinates(): { x: number; y: number }[] {
+    const points = [
+      { x: 0, z: -52 },
+      { x: -8, z: -57 },
+      { x: 8, z: -57 },
+      { x: 0, z: -55 },
+      { x: -5, z: -58 },
+      { x: 5, z: -58 }
+    ];
+    const rect = this.canvas.getBoundingClientRect();
+    const tempV = new THREE.Vector3();
+    return points.map((p) => {
+      tempV.set(p.x, 0, p.z);
+      tempV.project(this.camera);
+      return {
+        x: rect.left + (tempV.x * 0.5 + 0.5) * rect.width,
+        y: rect.top + (-(tempV.y * 0.5) + 0.5) * rect.height
+      };
+    });
+  }
+}

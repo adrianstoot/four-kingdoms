@@ -1,5 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#111b18"/>
-  <path d="M12 43V22l10 8 10-16 10 16 10-8v21z" fill="#e4bd62" stroke="#2d2118" stroke-width="3" stroke-linejoin="round"/>
-  <path d="M17 43h30v8H17z" fill="#477fbd" stroke="#2d2118" stroke-width="3"/>
+  <defs>
+    <radialGradient id="bg" cx=".35" cy=".25">
+      <stop offset="0" stop-color="#315b35"/>
+      <stop offset="1" stop-color="#0b1710"/>
+    </radialGradient>
+    <linearGradient id="shell" x1=".2" y1="0" x2=".8" y2="1">
+      <stop stop-color="#d95d3c"/>
+      <stop offset="1" stop-color="#67241f"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="url(#bg)"/>
+  <g fill="none" stroke="#d5ee8d" stroke-width="3" stroke-linecap="round">
+    <path d="M23 23 13 14M41 23l10-9"/>
+    <path d="m20 31-12-5m12 13L7 43m37-12 12-5M44 39l13 4"/>
+    <path d="m23 46-9 10m27-10 9 10"/>
+  </g>
+  <ellipse cx="32" cy="23" rx="10" ry="9" fill="url(#shell)" stroke="#141512" stroke-width="2"/>
+  <ellipse cx="32" cy="37" rx="12" ry="11" fill="#a93e2d" stroke="#141512" stroke-width="2"/>
+  <ellipse cx="32" cy="51" rx="10" ry="8" fill="#5c261f" stroke="#141512" stroke-width="2"/>
+  <ellipse cx="28" cy="20" rx="2" ry="2.6" fill="#8ff5db"/>
+  <ellipse cx="36" cy="20" rx="2" ry="2.6" fill="#8ff5db"/>
+  <path d="M27 34h10" stroke="#8fe9ff" stroke-width="3" stroke-linecap="round"/>
 </svg>

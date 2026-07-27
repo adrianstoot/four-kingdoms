@@ -35,7 +35,13 @@ describe('integral gameplay update', () => {
   });
 
   it('stores metric height, physical radius and attack anticipation for every archetype', () => {
-    const expectedHeights = { guard: 1.7, archer: 1.7, knight: 2.2, giant: 2.5, commander: 1.9 };
+    const expectedHeights = {
+      guard: 1.15,
+      archer: 1.2,
+      knight: 1.55,
+      giant: 2.2,
+      commander: 1.6,
+    };
     for (const unit of CONTENT.units) {
       expect(unit.height).toBe(expectedHeights[unit.id]);
       expect(unit.physicalRadius).toBe(unit.radius);

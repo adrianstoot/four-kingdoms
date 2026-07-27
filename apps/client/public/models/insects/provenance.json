@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "generator": "scripts/blender/build_insect_pack.py",
+  "tool": "Blender 5.2.0 LTS",
+  "externalAssets": false,
+  "networkServices": [],
+  "models": {
+    "ant.glb": {
+      "triangles": 3212,
+      "vertices": 2900,
+      "bones": 34,
+      "weightedVertices": 2900
+    },
+    "bee.glb": {
+      "triangles": 3572,
+      "vertices": 3355,
+      "bones": 39,
+      "weightedVertices": 3355
+    },
+    "mantis.glb": {
+      "triangles": 3456,
+      "vertices": 3306,
+      "bones": 36,
+      "weightedVertices": 3306
+    },
+    "beetle.glb": {
+      "triangles": 4212,
+      "vertices": 3789,
+      "bones": 37,
+      "weightedVertices": 3789
+    },
+    "butterfly.glb": {
+      "triangles": 5600,
+      "vertices": 5093,
+      "bones": 38,
+      "weightedVertices": 5093
+    }
+  },
+  "clips": [
+    "idle",
+    "walk",
+    "attack",
+    "hit",
+    "death",
+    "spawn"
+  ],
+  "rootMotion": false
+}

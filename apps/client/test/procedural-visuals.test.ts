@@ -49,28 +49,28 @@ describe("canonical faction visuals", () => {
     expect(FACTION_STYLES.map((faction) => faction.color)).toEqual([...FACTION_COLORS]);
     expect(FACTION_STYLES.map((faction) => faction.cssColor)).toEqual([...FACTION_CSS_COLORS]);
     expect(FACTION_STYLES.map((faction) => faction.name)).toEqual([
-      "REINO AZUL",
-      "DOMINIO CARMESÍ",
-      "PACTO ESMERALDA",
-      "CORTE VIOLETA",
+      "COLONIA ZAFIRO",
+      "ENJAMBRE RUBÍ",
+      "NIDO ESMERALDA",
+      "COLMENA AMATISTA",
     ]);
   });
 
   it.each(["giant", "commander"] as const)(
-    "gives the %s a visible faction insignia without tinting skin",
+    "gives the %s a visible faction insignia without tinting its dark chitin",
     (archetype) => {
       const blue = createDetailedUnitRigGeometry(archetype, FACTION_COLORS[0]);
       const red = createDetailedUnitRigGeometry(archetype, FACTION_COLORS[1]);
       const blueInsignia = verticesWithColor(blue, FACTION_COLORS[0]);
       const redInsignia = verticesWithColor(red, FACTION_COLORS[1]);
-      const blueSkin = verticesWithColor(blue, 0xe2ad76);
-      const redSkin = verticesWithColor(red, 0xe2ad76);
+      const blueChitin = verticesWithColor(blue, 0x171513);
+      const redChitin = verticesWithColor(red, 0x171513);
 
       expect(blueInsignia).toBeGreaterThan(20);
       expect(redInsignia).toBe(blueInsignia);
       expect(blueInsignia / blue.getAttribute("position").count).toBeLessThan(0.18);
-      expect(blueSkin).toBeGreaterThan(20);
-      expect(redSkin).toBe(blueSkin);
+      expect(blueChitin).toBeGreaterThan(20);
+      expect(redChitin).toBe(blueChitin);
 
       blue.computeBoundingBox();
       const height = (blue.boundingBox?.max.y ?? 0) - (blue.boundingBox?.min.y ?? 0);

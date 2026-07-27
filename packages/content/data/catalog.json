@@ -1,5 +1,5 @@
 {
-  "version": "metric-single-unit-2",
+  "version": "insect-swarm-1",
   "balance": {
     "tickRate": 20,
     "initialElixir": 5,
@@ -14,14 +14,14 @@
     "castleMaxHp": 10000
   },
   "units": [
-    { "id": "guard", "kind": "unit", "maxHp": 230, "damage": 34, "attackRange": 1.4, "aggroRange": 6, "attackCooldownTicks": 20, "attackAnticipationTicks": 7, "height": 1.7, "physicalRadius": 0.42, "radius": 0.42, "captureWeight": 1, "targetPriority": "closest", "moveSpeed": 3.1, "hero": false },
-    { "id": "archer", "kind": "unit", "maxHp": 125, "damage": 28, "attackRange": 6.8, "aggroRange": 8, "attackCooldownTicks": 24, "attackAnticipationTicks": 9, "height": 1.7, "physicalRadius": 0.4, "radius": 0.4, "captureWeight": 1, "targetPriority": "closest", "moveSpeed": 3, "hero": false },
-    { "id": "knight", "kind": "unit", "maxHp": 720, "damage": 65, "attackRange": 1.5, "aggroRange": 6, "attackCooldownTicks": 28, "attackAnticipationTicks": 10, "height": 2.2, "physicalRadius": 0.68, "radius": 0.68, "captureWeight": 1, "targetPriority": "closest", "moveSpeed": 2.45, "hero": false },
-    { "id": "giant", "kind": "unit", "maxHp": 1900, "damage": 135, "attackRange": 1.8, "aggroRange": 8, "attackCooldownTicks": 32, "attackAnticipationTicks": 12, "height": 2.5, "physicalRadius": 0.82, "radius": 0.82, "captureWeight": 2, "targetPriority": "buildings", "moveSpeed": 1.65, "hero": false },
-    { "id": "commander", "kind": "unit", "maxHp": 1100, "damage": 95, "attackRange": 2, "aggroRange": 7, "attackCooldownTicks": 22, "attackAnticipationTicks": 8, "height": 1.9, "physicalRadius": 0.5, "radius": 0.5, "captureWeight": 2, "targetPriority": "closest", "moveSpeed": 2.6, "hero": true }
+    { "id": "guard", "kind": "unit", "maxHp": 260, "damage": 36, "attackRange": 1.3, "aggroRange": 6, "attackCooldownTicks": 18, "attackAnticipationTicks": 6, "height": 1.15, "physicalRadius": 0.38, "radius": 0.38, "captureWeight": 1, "targetPriority": "closest", "moveSpeed": 3.4, "hero": false },
+    { "id": "archer", "kind": "unit", "maxHp": 145, "damage": 30, "attackRange": 7.2, "aggroRange": 8.5, "attackCooldownTicks": 22, "attackAnticipationTicks": 8, "height": 1.2, "physicalRadius": 0.4, "radius": 0.4, "captureWeight": 1, "targetPriority": "closest", "moveSpeed": 3.8, "hero": false },
+    { "id": "knight", "kind": "unit", "maxHp": 760, "damage": 72, "attackRange": 1.7, "aggroRange": 6.5, "attackCooldownTicks": 25, "attackAnticipationTicks": 8, "height": 1.55, "physicalRadius": 0.56, "radius": 0.56, "captureWeight": 1, "targetPriority": "closest", "moveSpeed": 3.2, "hero": false },
+    { "id": "giant", "kind": "unit", "maxHp": 2100, "damage": 150, "attackRange": 1.9, "aggroRange": 8, "attackCooldownTicks": 34, "attackAnticipationTicks": 13, "height": 2.2, "physicalRadius": 0.86, "radius": 0.86, "captureWeight": 2, "targetPriority": "buildings", "moveSpeed": 1.55, "hero": false },
+    { "id": "commander", "kind": "unit", "maxHp": 1050, "damage": 102, "attackRange": 2.2, "aggroRange": 7.5, "attackCooldownTicks": 21, "attackAnticipationTicks": 7, "height": 1.6, "physicalRadius": 0.52, "radius": 0.52, "captureWeight": 2, "targetPriority": "closest", "moveSpeed": 2.9, "hero": true }
   ],
   "buildings": [
-    { "id": "cannon_tower", "kind": "building", "maxHp": 1200, "damage": 75, "attackRange": 9, "aggroRange": 9, "attackCooldownTicks": 25, "attackAnticipationTicks": 8, "height": 4.8, "physicalRadius": 1.15, "radius": 1.15, "captureWeight": 0, "targetPriority": "closest", "lifetimeTicks": 2400 }
+    { "id": "cannon_tower", "kind": "building", "maxHp": 1250, "damage": 78, "attackRange": 9.5, "aggroRange": 9.5, "attackCooldownTicks": 24, "attackAnticipationTicks": 7, "height": 3.6, "physicalRadius": 1.15, "radius": 1.15, "captureWeight": 0, "targetPriority": "closest", "lifetimeTicks": 2400 }
   ],
   "cards": [
     { "id": "guards", "kind": "troop", "cost": 3, "archetypeId": "guard", "count": 1, "cooldownTicks": 0 },

@@ -7,23 +7,21 @@ import { SettingsPanel, type QualityLevel } from './components/SettingsPanel';
 import { playSound, setAudioEnabled, setAudioVolume } from './audio';
 import type { CameraPose, PlacementPreview, RendererResourceProgress, WorldRendererMetrics } from './game/types';
 import { toUiSnapshot } from './game/uiSnapshot';
-import titleBackground from './assets/title-background.webp';
-import loadingBackground from './assets/loading-background.webp';
-import titleBackground1920 from './assets/title-background-1920.webp';
-import loadingBackground1920 from './assets/loading-background-1920.webp';
+import titleBackground from './assets/insect-title-background.svg';
+import loadingBackground from './assets/insect-loading-background.svg';
 import { FACTION_STYLES } from './game/factions';
 
 const factions = FACTION_STYLES;
 
 const cards: readonly CardDisplay[] = [
-  { id: 'guards', name: 'GUARDIÁN', cost: 3, icon: '', atlasIndex: 0, accent: '#477fbd', description: 'Un guardián cuerpo a cuerpo de 1,70 m.' },
-  { id: 'archers', name: 'ARQUERO', cost: 3, icon: '', atlasIndex: 1, accent: '#6ea668', description: 'Un arquero de 1,70 m con ataque a distancia.' },
-  { id: 'knight', name: 'CABALLERO', cost: 4, icon: '', atlasIndex: 2, accent: '#6d82a9', description: 'Un caballero montado de primera línea.' },
-  { id: 'giant', name: 'GIGANTE', cost: 7, icon: '', atlasIndex: 3, accent: '#b8804e', description: 'Un gigante de 2,50 m que prioriza edificios.' },
-  { id: 'cannon_tower', name: 'TORRE', cost: 4, icon: '', atlasIndex: 4, accent: '#8a8068', description: 'Defensa fija para los pads laterales del carril.' },
-  { id: 'commander', name: 'COMANDANTE', cost: 5, icon: '', atlasIndex: 5, accent: '#b65243', description: 'Un comandante con aura de mando.' },
-  { id: 'fireball', name: 'BOLA DE FUEGO', cost: 4, icon: '', atlasIndex: 6, accent: '#d66135', description: 'Proyectil explosivo lanzado desde tu castillo.' },
-  { id: 'chain_lightning', name: 'RELÁMPAGO', cost: 5, icon: '', atlasIndex: 7, accent: '#6b9fe5', description: 'Rayo que encadena hasta cuatro objetivos.' },
+  { id: 'guards', name: 'HORMIGA SOLDADO', cost: 3, icon: '', atlasIndex: 0, accent: '#b74432', description: 'Soldado acorazado con mandíbulas de choque.' },
+  { id: 'archers', name: 'ABEJA AGUIJÓN', cost: 3, icon: '', atlasIndex: 1, accent: '#d8a92c', description: 'Hostiga desde el aire con aguijones de néctar endurecido.' },
+  { id: 'knight', name: 'MANTIS CAZADORA', cost: 4, icon: '', atlasIndex: 2, accent: '#6ca24b', description: 'Depredadora veloz con cuchillas raptoras.' },
+  { id: 'giant', name: 'ESCARABAJO TITÁN', cost: 7, icon: '', atlasIndex: 3, accent: '#76513f', description: 'Ariete viviente que prioriza hormigueros y torres.' },
+  { id: 'cannon_tower', name: 'TORRE TERMITA', cost: 4, icon: '', atlasIndex: 4, accent: '#b68b52', description: 'Nido defensivo que dispara resina a presión.' },
+  { id: 'commander', name: 'MONARCA', cost: 5, icon: '', atlasIndex: 5, accent: '#e27a2e', description: 'Mariposa heroica que coordina el enjambre.' },
+  { id: 'fireball', name: 'BOMBA ÁCIDA', cost: 4, icon: '', atlasIndex: 6, accent: '#80c43d', description: 'Glóbulo corrosivo lanzado desde tu hormiguero.' },
+  { id: 'chain_lightning', name: 'ENJAMBRE ELÉCTRICO', cost: 5, icon: '', atlasIndex: 7, accent: '#55c8e9', description: 'Luciérnagas ionizadas encadenan hasta cuatro objetivos.' },
 ];
 
 const spellCards = new Set(['fireball', 'chain_lightning']);
@@ -49,8 +47,8 @@ function formatTime(seconds: number): string {
 
 function rejectionMessage(reason?: string): string {
   switch (reason) {
-    case 'insufficient-elixir': return 'No tienes suficiente elixir';
-    case 'card-on-cooldown': return 'La unidad todavía se está preparando';
+    case 'insufficient-elixir': return 'No tienes suficiente néctar';
+    case 'card-on-cooldown': return 'La criatura todavía se está preparando';
     case 'outside-deployment-zone': return 'Despliega dentro de tu zona del carril';
     case 'too-far-from-lane': return 'Acerca el cursor al centro del camino';
     case 'no-tower-pad': return 'La torre solo puede colocarse en un pad lateral';
@@ -112,8 +110,8 @@ export function App() {
 
   const ui = useMemo(() => toUiSnapshot(snapshot), [snapshot]);
   const player = ui.players[0]!;
-  const titleStyle = useMemo(() => ({ '--screen-image': `image-set(url("${titleBackground1920}") 1x, url("${titleBackground}") 2x)` }) as CSSProperties, []);
-  const loadingStyle = useMemo(() => ({ '--screen-image': `image-set(url("${loadingBackground1920}") 1x, url("${loadingBackground}") 2x)` }) as CSSProperties, []);
+  const titleStyle = useMemo(() => ({ '--screen-image': `url("${titleBackground}")` }) as CSSProperties, []);
+  const loadingStyle = useMemo(() => ({ '--screen-image': `url("${loadingBackground}")` }) as CSSProperties, []);
 
   const showNotice = useCallback((message: string, duration = 1700) => {
     if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
@@ -294,7 +292,7 @@ export function App() {
     const card = cards.find((candidate) => candidate.id === cardId);
     const cooldown = player.cooldowns[cardId] ?? 0;
     if (card && player.elixir + 0.001 < card.cost) {
-      showNotice(`Necesitas ${Math.ceil(card.cost - player.elixir)} más de elixir; la selección seguirá activa.`, 2200);
+      showNotice(`Necesitas ${Math.ceil(card.cost - player.elixir)} más de néctar; la selección seguirá activa.`, 2200);
     } else if (cooldown > 0) {
       showNotice('La selección seguirá activa hasta que termine la preparación.', 2200);
     }
@@ -317,12 +315,12 @@ export function App() {
     const card = cards.find((candidate) => candidate.id === selectedCard);
     if (!card) return;
     if (player.elixir + 0.001 < card.cost) {
-      showNotice(`Necesitas ${Math.ceil(card.cost - player.elixir)} más de elixir; la unidad sigue seleccionada.`, 2100);
+      showNotice(`Necesitas ${Math.ceil(card.cost - player.elixir)} más de néctar; la criatura sigue seleccionada.`, 2100);
       playSound('click');
       return;
     }
     if ((player.cooldowns[selectedCard] ?? 0) > 0) {
-      showNotice('Esta unidad aún se está preparando; la selección sigue activa.', 1900);
+      showNotice('Esta criatura aún se está preparando; la selección sigue activa.', 1900);
       playSound('click');
       return;
     }
@@ -407,14 +405,14 @@ export function App() {
 
   const centerFaction = ui.centerOwner >= 0 ? (factions[ui.centerOwner] ?? null) : null;
   const centerLabel = centerFaction
-    ? `CONTROL ${centerFaction.name.replace('REINO ', '').replace('DOMINIO ', '').replace('PACTO ', '').replace('CORTE ', '')}`
+    ? `CONTROL ${centerFaction.name}`
     : ui.centerProgress > 0 ? `CAPTURA ${Math.round(ui.centerProgress * 100)}%` : 'NEUTRAL';
-  const resultTitle = ui.draw ? 'EMPATE DE CENIZA' : ui.winner === 0 || ui.winner === 2 ? 'VICTORIA DEL EQUIPO AZUL' : 'VICTORIA DEL EQUIPO RIVAL';
+  const resultTitle = ui.draw ? 'EQUILIBRIO DEL ENJAMBRE' : ui.winner === 0 || ui.winner === 2 ? 'VICTORIA DE LA ALIANZA ZAFIRO' : 'VICTORIA DEL ENJAMBRE RIVAL';
   const resultText = ui.draw
-    ? 'Los dos equipos perdieron sus últimos castillos al mismo tiempo.'
+    ? 'Los dos equipos perdieron sus últimos hormigueros al mismo tiempo.'
     : ui.winner === 0 || ui.winner === 2
-      ? 'Tú y la IA Esmeralda habéis derrotado a los dos reinos rivales.'
-      : 'Las IA Carmesí y Violeta han destruido los castillos de tu equipo.';
+      ? 'Tu colonia y el Nido Esmeralda han conquistado los dos hormigueros rivales.'
+      : 'El Enjambre Rubí y la Colmena Amatista han invadido vuestra red de túneles.';
   const nextElixir = player.elixir >= player.maxElixir ? 0 : Math.max(0, 2.5 - (ui.seconds % 2.5));
   const elixirSegments = 10;
   const filledElixir = player.elixir <= 0 ? 0 : Math.ceil((player.elixir / Math.max(1, player.maxElixir)) * elixirSegments);
@@ -430,7 +428,7 @@ export function App() {
         ? 'SINCRONIZANDO LA PARTIDA'
         : !firstFrame
           ? 'COMPONIENDO EL CAMPO DE BATALLA'
-          : 'LOS REINOS ESTÁN LISTOS';
+          : 'LAS COLONIAS ESTÁN LISTAS';
 
   return (
     <main className={`game-shell mode-${mode}`}>
@@ -462,7 +460,7 @@ export function App() {
           <div className="objective-stack">
             <section className="objective-panel" style={{ '--objective-color': centerFaction?.color ?? '#c7a361' } as CSSProperties}>
               <button className="menu-button" type="button" onClick={() => setSettingsOpen((open) => !open)} aria-label="Abrir menú"><span /><span /><span /></button>
-              <div className="objective-copy"><span>CÍRCULO CENTRAL</span><strong>{centerLabel}</strong></div>
+              <div className="objective-copy"><span>CORAZÓN DEL BOSQUE</span><strong>{centerLabel}</strong></div>
             </section>
             <div className="match-clock"><HourglassIcon /><strong>{formatTime(ui.seconds)}</strong></div>
           </div>
@@ -513,11 +511,11 @@ export function App() {
           <GameMinimap snapshot={snapshot} cameraPose={cameraPose} />
           <CardHand cards={cards} selectedId={selectedCard} elixir={player.elixir} cooldowns={player.cooldowns} onSelect={selectCard} />
 
-          <section className="elixir-panel" aria-label="Elixir disponible">
+          <section className="elixir-panel" aria-label="Néctar disponible">
             <div className="elixir-heading">
               <DropIcon />
               <strong>{Math.floor(player.elixir)}</strong>
-              <span>MÁX. {player.maxElixir}</span>
+              <span>MÁX. {player.maxElixir} NÉCTAR</span>
             </div>
             <div className="elixir-segments" aria-hidden="true">
               {Array.from({ length: elixirSegments }, (_, index) => <i className={index < filledElixir ? 'filled' : ''} key={index} />)}
@@ -540,7 +538,7 @@ export function App() {
             <div className="perf-panel">
               <div><span>{backend.toUpperCase()}</span><strong>{metrics.fps.toFixed(0)} FPS</strong></div>
               <div><span>P95</span><strong>{metrics.p95FrameTimeMs.toFixed(1)} ms</strong></div>
-              <div><span>TROPAS</span><strong>{ui.unitCount}</strong></div>
+              <div><span>CRIATURAS</span><strong>{ui.unitCount}</strong></div>
               <div><span>TRIÁNGULOS</span><strong>{Math.round(metrics.triangles / 1000)}k</strong></div>
             </div>
           )}
@@ -566,10 +564,10 @@ export function App() {
         <section className="cinematic-screen title-screen" style={titleStyle}>
           <div className="cinematic-shade" />
           <div className="title-hero">
-            <p className="eyebrow">BATALLA ESTRATÉGICA · 2 CONTRA 2</p>
-            <div className="crest-mark"><span>IV</span></div>
-            <h1 className="game-title">CUATRO<br />REINOS</h1>
-            <p className="game-subtitle">Conquista los carriles, domina el círculo central y conduce al Reino Azul hacia la victoria.</p>
+            <p className="eyebrow">GUERRA ESTRATÉGICA DEL MICROMUNDO · 2 CONTRA 2</p>
+            <div className="crest-mark insect-crest"><span>✦</span></div>
+            <h1 className="game-title">IMPERIOS<br />DEL ENJAMBRE</h1>
+            <p className="game-subtitle">Guía a la Colonia Zafiro, conquista las raíces y domina el corazón vivo del bosque.</p>
             <button type="button" className="primary-button play-button" onClick={() => startMatch()}>JUGAR</button>
             <div className="title-controls"><span>WASD MOVER</span><span>RUEDA ZOOM</span><span>BOTÓN DERECHO ROTAR</span></div>
           </div>
@@ -581,7 +579,7 @@ export function App() {
           <div className="cinematic-shade" />
           <div className="loading-panel">
             <div className="loading-sigil" aria-hidden="true"><i /><i /><i /><span>IV</span></div>
-            <p className="eyebrow">PREPARANDO LOS REINOS…</p>
+            <p className="eyebrow">PREPARANDO LAS COLONIAS…</p>
             <h2>{loadingLabel}</h2>
             <div className="loading-track" role="progressbar" aria-label="Carga de la partida" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(loadingProgress * 100)}>
               <div style={{ width: `${loadingProgress * 100}%` }} />
@@ -589,7 +587,7 @@ export function App() {
             <div className="loading-checkpoints" aria-hidden="true">
               <span className={rendererReady ? 'ready' : ''}>MOTOR 3D</span>
               <span className={resourceProgress >= 0.5 ? 'ready' : ''}>TEXTURAS</span>
-              <span className={resourcesReady ? 'ready' : ''}>RIGS</span>
+              <span className={resourcesReady ? 'ready' : ''}>CRIATURAS</span>
               <span className={firstSnapshot ? 'ready' : ''}>PARTIDA</span>
               <span className={firstFrame ? 'ready' : ''}>PRIMER FRAME</span>
             </div>
@@ -601,8 +599,8 @@ export function App() {
         <section className="cinematic-screen error-screen" style={loadingStyle}>
           <div className="cinematic-shade" />
           <div className="result-card error-card" role="alert">
-            <p className="eyebrow">NO SE PUDO PREPARAR LA BATALLA</p>
-            <h2 className="game-title result-title">LOS REINOS ESPERAN</h2>
+            <p className="eyebrow">NO SE PUDO DESPERTAR EL MICROMUNDO</p>
+            <h2 className="game-title result-title">EL ENJAMBRE ESPERA</h2>
             <p className="game-subtitle">{loadError ?? 'Ha ocurrido un error inesperado durante la carga.'}</p>
             <button type="button" className="primary-button" onClick={() => startMatch(true)}>REINTENTAR</button>
             <button type="button" className="secondary-button" onClick={() => {

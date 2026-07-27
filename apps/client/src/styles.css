@@ -10,7 +10,9 @@
   --panel: rgba(25, 29, 24, 0.97);
   --panel-light: rgba(36, 39, 31, 0.96);
   --ink: #0a0f0c;
-  --violet: #ad4ed4;
+  --violet: #68d99a;
+  --nectar: #aee85f;
+  --biolume: #73efd2;
 }
 
 * { box-sizing: border-box; }
@@ -368,8 +370,8 @@ button { -webkit-tap-highlight-color: transparent; }
 .card.selected {
   z-index: 2;
   transform: translateY(-16px);
-  border-color: #c879ef;
-  box-shadow: 0 0 0 2px rgba(190, 92, 230, .58), 0 8px 22px rgba(85, 23, 106, .75), inset 0 0 0 2px #141117;
+  border-color: #82e7a6;
+  box-shadow: 0 0 0 2px rgba(92, 230, 148, .58), 0 8px 22px rgba(23, 106, 72, .75), inset 0 0 0 2px #101713;
 }
 
 .card.disabled { cursor: not-allowed; }
@@ -394,9 +396,9 @@ button { -webkit-tap-highlight-color: transparent; }
   border: 2px solid #a27a49;
   border-radius: 50%;
   background-color: #1b2018;
-  background-image: url('./assets/card-atlas.png');
+  background-image: url('./assets/insect-card-atlas.svg');
   background-repeat: no-repeat;
-  background-size: 400% 266.666%;
+  background-size: 400% 200%;
   background-position: var(--atlas-x) var(--atlas-y);
   box-shadow: inset 0 0 0 2px #0d110d, 0 2px 7px #080b08;
   transform: translateX(-50%);
@@ -419,15 +421,15 @@ button { -webkit-tap-highlight-color: transparent; }
   place-items: center;
   width: clamp(32px, 2.6vw, 42px);
   height: clamp(32px, 2.6vw, 42px);
-  color: #f6dcff;
+  color: #f3ffe1;
   font-size: clamp(17px, 1.35vw, 21px);
   font-weight: 700;
   line-height: 1;
-  border: 2px solid #6e2b84;
+  border: 2px solid #426d26;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 25%, #d76cec, #8d36b4 58%, #4d1a65);
-  box-shadow: 0 2px 0 #161016, inset 0 0 0 2px rgba(240, 178, 255, .28), 0 3px 8px #09050b;
-  text-shadow: 0 2px 1px #3d144e;
+  background: radial-gradient(circle at 35% 25%, #d9f47b, #79b83f 58%, #315a23);
+  box-shadow: 0 2px 0 #101610, inset 0 0 0 2px rgba(225, 255, 178, .3), 0 3px 8px #050b06;
+  text-shadow: 0 2px 1px #29431f;
 }
 
 .card-name {
@@ -480,7 +482,7 @@ button { -webkit-tap-highlight-color: transparent; }
   height: 45%;
 }
 
-.elixir-heading .drop-icon { width: clamp(29px, 2.3vw, 39px); height: clamp(36px, 2.9vw, 48px); color: #b953d6; filter: drop-shadow(0 2px #35113d) drop-shadow(0 0 5px rgba(192,86,225,.45)); }
+.elixir-heading .drop-icon { width: clamp(29px, 2.3vw, 39px); height: clamp(36px, 2.9vw, 48px); color: #aee85f; filter: drop-shadow(0 2px #29431f) drop-shadow(0 0 7px rgba(151,228,90,.55)); }
 .elixir-heading strong { color: #f0dcba; font-size: clamp(26px, 2.2vw, 36px); line-height: 1; }
 .elixir-heading span { align-self: center; justify-self: end; padding-top: 8px; font-size: clamp(9px, .75vw, 12px); font-weight: 700; }
 
@@ -496,8 +498,8 @@ button { -webkit-tap-highlight-color: transparent; }
   box-shadow: inset 0 1px 3px #000, 0 1px rgba(226,190,235,.18);
 }
 
-.elixir-segments i { border-radius: 3px; background: #34163e; }
-.elixir-segments i.filled { background: linear-gradient(180deg, #df73ed, #9e42ca 58%, #6d258f); box-shadow: inset 0 1px rgba(255,255,255,.38), 0 0 4px rgba(174,68,210,.5); }
+.elixir-segments i { border-radius: 3px; background: #20341d; }
+.elixir-segments i.filled { background: linear-gradient(180deg, #d8f67b, #84c84a 58%, #477f2d); box-shadow: inset 0 1px rgba(255,255,255,.38), 0 0 5px rgba(144,220,74,.55); }
 .elixir-next { margin-top: clamp(6px, .8vh, 9px); font-size: clamp(9px, .78vw, 12px); font-weight: 700; text-align: center; }
 
 .placement-tip {
@@ -620,6 +622,17 @@ button { -webkit-tap-highlight-color: transparent; }
   border-radius: 50%;
   background: radial-gradient(circle at 40% 30%, #e7c57e, #a87937 72%, #68441d);
   box-shadow: 0 4px 0 #3b2815, 0 8px 20px #0007, inset 0 0 0 4px rgba(61,39,18,.28);
+}
+
+.insect-crest {
+  color: #172219;
+  border-color: #bde978;
+  background:
+    radial-gradient(circle at 50% 50%, #d5f184 0 16%, transparent 17%),
+    radial-gradient(ellipse at 27% 50%, #78bd57 0 25%, transparent 27%),
+    radial-gradient(ellipse at 73% 50%, #78bd57 0 25%, transparent 27%),
+    linear-gradient(145deg, #c9ec7b, #558e42 70%, #284b2d);
+  box-shadow: 0 4px 0 #25361f, 0 8px 26px #0008, 0 0 34px rgba(113, 239, 193, .25), inset 0 0 0 4px rgba(33, 70, 42, .34);
 }
 
 .game-title {
