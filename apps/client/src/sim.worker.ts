@@ -32,8 +32,12 @@ self.onmessage = (event: MessageEvent<IncomingMessage>) => {
     case 'start':
       activeSessionId = message.sessionId;
       recreate(message.seed, message.maxEntities);
-      running = true;
-      game.setPaused(false);
+      // The renderer can need a long first shader compilation on an uncached
+      // device. Publish tick zero immediately, but do not let bots fight
+      // behind the loading screen; React releases the simulation after the
+      // first complete frame has been presented.
+      running = false;
+      game.setPaused(true);
       break;
     case 'command': {
       if (message.sessionId !== activeSessionId) break;
