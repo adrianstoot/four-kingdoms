@@ -263,7 +263,10 @@ export function App() {
       setLoadError('La carga superó el tiempo esperado. Comprueba la aceleración 3D y vuelve a intentarlo.');
       modeRef.current = 'error';
       setMode('error');
-    }, 18000);
+    // The first WebGL2/WebGPU shader compilation can legitimately take tens of
+    // seconds on an uncached browser. Keep the loading screen alive instead of
+    // reporting a false failure while the renderer is still making progress.
+    }, 90000);
     return () => window.clearTimeout(timeout);
   }, [mode, rendererReady, resourcesReady, firstSnapshot, firstFrame]);
 
